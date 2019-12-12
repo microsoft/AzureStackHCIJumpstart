@@ -1,9 +1,5 @@
 # These functions are not exported
 Function Get-LabConfig {
-    # This is the path where VMs will be created for the lab e.g. c:\DataStore\VMs (then \VM01 folder will be added below it)
-    $global:VMPath = 'C:\DataStore\VMs'
-    New-Item -Path $VMPath -ItemType Directory -Force -ErrorAction SilentlyContinue
-
     $LabConfig = @{
         # Will be appended to every VM
         Prefix     = 'AzStackHCI'
@@ -37,6 +33,20 @@ Function Get-LabConfig {
             ParentVHD          = 'BaseDisk_19507.vhdx'
             MemoryStartupBytes = 8192MB
             EnableWinRM        = $True
+
+            SCMDrives = @{ Count = 2 ; Size  = 32GB  }
+            SSDDrives = @{ Count = 4 ; Size  = 256GB }
+            HDDDrives = @{ Count = 8 ; Size  = 1TB   }
+
+            Adapters = @(
+                #Note: Where/when needed, these will include a unique number to distinguish
+                @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
+                @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
+                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
+                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
+                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
+                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
+            )
         }
     }
 
@@ -65,12 +75,16 @@ Function Get-LabConfig {
     $LabConfig.DomainNetbiosName = ($LabConfig.DomainName.Split('.')[0])
     $LabConfig.PullServerDC  = $true
 
+    $global:VMPath = 'C:\DataStore\VMs'
+    New-Item -Path $VMPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    # This is the path where VMs will be created for the lab e.g. c:\DataStore\VMs (then \VM01 folder will be added below it)
+
     # Prep local and domain creds
     $global:pass   = ConvertTo-SecureString $($LabConfig.AdminPassword) -AsPlainText -Force
     $global:VMCred = New-Object System.Management.Automation.PSCredential ("$($LabConfig.DomainName)\$($LabConfig.DomainAdminName)", $pass)
     $global:localCred = New-Object System.Management.Automation.PSCredential ('.\Administrator', $pass)
 
-    return $LabConfig
+    $LabConfig
 }
 
 #region Used for VM/Lab configuration
@@ -88,14 +102,14 @@ function Wait-ForHeartbeatState {
             $VMs | ForEach-Object {
                 While ((Get-VMIntegrationService -VMName $_.Name -Name Heartbeat).PrimaryStatusDescription -ne 'Ok') {
                     Write-Host "`t Waiting on Heartbeat for: $($_.Name)"
-                    Write-Host "`t Getting sleepy..."
+                    Write-Host "`t `t Getting sleepy..."
                     Start-Sleep -Seconds 5
                 }
 
                 Write-Host "`t Ensuring PowerShell Direct is ready for: $($_.Name)"
 
                 do {
-                    Write-Host "`t `t Checking PowerShell Direct on $($_.Name)"
+                    Write-Host "`t `t Checking PowerShell Direct on $($_.Name)...Getting sleepy again"
                     $Availability = New-PSSession -VMName $($_.Name) -Credential $localCred -ErrorAction SilentlyContinue
 
                     Start-Sleep -Seconds 5
@@ -473,7 +487,7 @@ Function Add-LabVirtualMachines {
         $SwitchName = "AzureStackHCILabSwitch_$SwitchGuid"
 
         Write-Host "`t Creating switch $Switchname"
-        New-VMSwitch -SwitchType Private -Name $Switchname -InformationAction SilentlyContinue
+        New-VMSwitch -SwitchType Private -Name $Switchname | Out-Null
     }
 
     $LabConfig.VMs | ForEach-Object {
@@ -541,20 +555,18 @@ Function Assert-LabDomain {
 
 # This should be status -ne Success
         if ($DscConfigurationStatus.Status -ne 'Success') {
-            Write-Host "`t `t Domain Controller Configuration in Progress. Sleeping for 20 seconds...Yaaaawwwwwnnnn..."
+            Write-Host "`t Domain Controller Configuration in Progress. Sleeping for 20 seconds...Yaaaawwwwwnnnn..."
 
-            If ($DSCLocalConfigurationManager.LCMState -eq $null) {
-                Write-Host "`t `t `t LCM State : Unknown - Machine may be rebooting `n"
-            }
+            If ($DSCLocalConfigurationManager.LCMState -eq $null) { Write-Host "`t `t LCM State : Unknown - Machine may be rebooting `n" }
             Else {
-                Write-Host "`t `t `t LCM State : $($DSCLocalConfigurationManager.LCMState)"
-                Write-Host "`t `t `t LCM Detail: $($DSCLocalConfigurationManager.LCMStateDetail) `n"
+                Write-Host "`t `t LCM State : $($DSCLocalConfigurationManager.LCMState)"
+                Write-Host "`t `t LCM Detail: $($DSCLocalConfigurationManager.LCMStateDetail) `n"
             }
 
             Start-Sleep 20
         } ElseIf ($DscConfigurationStatus.status -eq "Success" -and $DscConfigurationStatus.Type -ne 'LocalConfigurationManager' ) {
-            Write-Host "`t `t Current DSC state: $($DscConfigurationStatus.status), ResourncesNotInDesiredState: $($DscConfigurationStatus.resourcesNotInDesiredState.count), ResourncesInDesiredState: $($DscConfigurationStatus.resourcesInDesiredState.count)."
-            Write-Host "`t `t `t Domain $($LabConfig.DomainName) configured successfully `n"
+            Write-Host "`t Current Domain state: $($DscConfigurationStatus.status), ResourcesNotInDesiredState: $($DscConfigurationStatus.resourcesNotInDesiredState.count), ResourcesInDesiredState: $($DscConfigurationStatus.resourcesInDesiredState.count)"
+            Write-Host "`t `t Domain $($LabConfig.DomainName) configured successfully `n"
         }
 
         #$i++
@@ -591,6 +603,8 @@ Function Move-ToNewParentVHDX {
     Write-Host "`t Copying $($VM.Name) BaseDisk to $NewBasePath"
     Copy-Item -Path $BaseDiskPath -Destination $NewBasePath -InformationAction SilentlyContinue
 
+    $Global:BaseDiskACL = Get-ACL $BaseDiskPath
+
     Write-Host "`t Reparenting $($VM.Name) OSD to $NewBasePath"
     $VHDXToConvert | Set-VHD -ParentPath $NewBasePath -IgnoreIdMismatch
 }
@@ -604,11 +618,15 @@ Function Convert-FromDiffDisk {
         $VHDXToConvert
     )
 
-    Write-Host "`t Merging $($VM.Name) OSD to $NewBasePath"
+    $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
+    Write-Host "`t Merging $($VM.Name) OSD to $($BaseDiskPath)"
 
-    Merge-VHD -Path $VHDXToConvert.Path -DestinationPath $NewBasePath
+    Set-ACL -Path $BaseDiskPath -AclObject $BaseDiskACL
+    Set-ItemProperty -Path $BaseDiskPath -Name IsReadOnly -Value $false
+
+    Merge-VHD -Path $VHDXToConvert.Path -DestinationPath $BaseDiskPath
     Remove-VMHardDiskDrive -VMName $VM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI
-    Add-VMHardDiskDrive -VM $VM -Path $NewBasePath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
+    Add-VMHardDiskDrive -VM $VM -Path $BaseDiskPath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
 }
 
 #TODO: Add other VMs

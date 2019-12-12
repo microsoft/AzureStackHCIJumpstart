@@ -5,6 +5,8 @@ Function Approve-AzureStackHCILabHostState {
         [String] $Test
     )
 
+    $here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+
     Switch ($Test) {
         'Host' {
             $ValidationResults = Invoke-Pester -Tag Host -Script "$here\tests\unit\unit.tests.ps1" -PassThru
@@ -28,7 +30,7 @@ Function Remove-AzureStackHCILabEnvironment {
     # Clean
     Clear-Host
 
-    If ($FireAndBrimstone) { Write-Host 'Fire and Brimstone mode was specified -- This environment will self-destruct in 5 seconds' ; Start-Sleep -Seconds 5 }
+    If ($FireAndBrimstone) { Write-Host 'Fire and Brimstone was specified -- This environment will self-destruct in T-5 seconds' ; Start-Sleep -Seconds 5 }
 
     # Reimporting in case this is run directly
     $here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
@@ -89,7 +91,6 @@ Function New-AzureStackHCILabEnvironment {
     New-UnattendFileForVHD -TimeZone $TimeZone -AdminPassword $LabConfig.AdminPassword -Path "$VMPath\buildData"
 
     # Update BaseDisk with Unattend and DSC
-
     Initialize-BaseDisk
 
     # Create Virtual Machines
@@ -119,7 +120,7 @@ Function New-AzureStackHCILabEnvironment {
         $CurrentName = Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock { $env:ComputerName }
 
         if ($CurrentName -ne $thisSystem) {
-            Write-Host "Renaming $thisSystem guest OS and rebooting prior to domain creation"
+            Write-Host "`t Renaming $thisSystem guest OS and rebooting prior to domain creation"
 
             Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
                 Rename-Computer -NewName $using:thisSystem -Force -WarningAction SilentlyContinue
@@ -134,7 +135,7 @@ Function New-AzureStackHCILabEnvironment {
         $DC = Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
     }
 
-    Write-Host "`t Configuring DC using DSC takes a while. Please be patient"
+    Write-Host "Configuring DC using DSC takes a while. Please be patient"
 
     Get-ChildItem "$VMPath\buildData\config" -Recurse -File | ForEach-Object {
         Copy-VMFile -Name $DC.Name -SourcePath $_.FullName -DestinationPath $_.FullName -CreateFullPath -FileSource Host -Force
@@ -146,125 +147,141 @@ Function New-AzureStackHCILabEnvironment {
     $LabConfig.VMs.Where{ $_.Role -ne 'Domain Controller' } | Foreach-Object {
         $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
         Write-Host "Joining $thisSystem to domain"
-
+#TODO: Only do this if not already joined
         $thisDomain = $LabConfig.DomainNetbiosName
         Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
-            Add-Computer -ComputerName $using:thisSystem -LocalCredential $Using:localCred -DomainName $using:thisDomain -Credential $Using:VMCred -Force -WarningAction SilentlyContinue
+            Add-Computer -ComputerName $using:thisSystem -LocalCredential $Using:localCred -DomainName $using:thisDomain -Credential $Using:VMCred -Force -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
         }
     }
 
+    Write-Host 'Shutting down VMs for Merge'
     Reset-AzStackVMs -Shutdown -VMs $AllVMs
 
-    Remove-Variable VHDXToConvert, BaseDiskPath
+    Remove-Variable VHDXToConvert, BaseDiskPath -ErrorAction SilentlyContinue
 
-    # Begin Reparenting Disks
+    # Begin Merge
     $AllVMs | ForEach-Object {
+        Remove-Variable VHDXToConvert, BaseDiskPath -ErrorAction SilentlyContinue
         $VHDXToConvert = $_ | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
         $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
 
-        if ($BaseDiskPath -ne $null) {
-            Write-Host "Beginning VHDX Merge for $($_.Name)"
+        # Note: Get-VHD ParentPath always reports with 1 character if it's actually Null which is why we're doing this next monstrosity to figure out if it actually has a base disk or not
+        if ($BaseDiskPath.Length -gt 0) {
+            Write-Host "`t Beginning VHDX Merge for $($_.Name)"
             Convert-FromDiffDisk -VM $_ -VHDXToConvert $VHDXToConvert
         }
+        Else { Write-Host "`t $($_.Name) VHDX has already been merged - backslash Ignore"}
     }
 
     Write-Host "Completed Environment Setup"
 }
 
 Function Invoke-AzureStackHCILabVMCustomization {
-    # Most of these actions require the VMs to be shutdown
-    Reset-AzStackVMs -Shutdown
-
-    # Make sure nesting is enabled
-    $VMs | ForEach-Object {
-        $NestedEnabled = (Get-VMProcessor -VMName $_.Name).ExposeVirtualizationExtensions
-
-        if ($NestedEnabled) { Set-VMProcessor -VMName $_.Name -ExposeVirtualizationExtensions $true }
+    $AzureStackHCIVMs = @()
+    $LabConfig.VMs.Where{$_.Role -eq 'AzureStackHCI'} | ForEach-Object {
+        $AzureStackHCIVMs += Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
     }
 
-    # Remove/destroy existing drives
-    $VMs | ForEach-Object {
+    # Most of these actions require the VMs to be shutdown
+    Reset-AzStackVMs -Shutdown -VMs $AzureStackHCIVMs
+
+    # Make sure nesting is enabled; Remove existing drives (except OS); Remove existing NICs (except OS)
+    $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
+        $NestedEnabled = (Get-VMProcessor -VMName $thisVM.VMName).ExposeVirtualizationExtensions
 
-        $numSCMDrives = 2
-        $numSSDDrives = 4
-        $numCapDrives = 12
+        if (-not ($NestedEnabled)) { Set-VMProcessor -VMName $thisVM.VMName -ExposeVirtualizationExtensions $true }
 
-        0..($numSCMDrives - 1) | ForEach-Object {
-            Remove-VMHardDiskDrive -VMName $thisVM.Name -ControllerType SCSI -ControllerNumber 1 -ControllerLocation $_ -ErrorAction SilentlyContinue
+        Get-VMScsiController -VMName $thisVM.VMName | ForEach-Object {
+            $thisSCSIController = $_
+
+            $thisSCSIController.Drives | ForEach-Object {
+                $thisVMDrive = $_
+
+                if (-not ($_.ControllerNumber -eq 0 -and $_.ControllerLocation -eq 0)) {
+                    $thisVMDrive | Remove-VMHardDiskDrive
+                }
+            }
+
+            if ($thisSCSIController.ControllerNumber -ne 0) { Remove-VMScsiController -VMName $thisVM.VMName -ControllerNumber $thisSCSIController.ControllerNumber }
         }
 
-        0..($numSSDDrives - 1) | ForEach-Object {
-            Remove-VMHardDiskDrive -VMName $thisVM.Name -ControllerType SCSI -ControllerNumber 1 -ControllerLocation $_ -ErrorAction SilentlyContinue
+        Write-Host "Remove virtual adapters from: $($thisVM.VMName)"
+        Get-VMNetworkAdapter -VMName $thisVM.VMName | ForEach-Object {
+            Remove-VMNetworkAdapter -VMName $thisVM.VMName
         }
-
-        0..($numCapDrives - 1)  | ForEach-Object {
-            Remove-VMHardDiskDrive -VMName $thisVM.Name -ControllerType SCSI -ControllerNumber 2 -ControllerLocation $_ -ErrorAction SilentlyContinue
-        }
-
-        $thisVMPath = Join-path $thisVM.Path 'Virtual Hard Disks\DataDisks'
-        Remove-Item -Path $thisVMPath -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     # Create and attach new drives
-    $VMs | ForEach-Object {
-
+    $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
         $thisVMPath = Join-path $thisVM.Path 'Virtual Hard Disks\DataDisks'
+        Remove-Item -Path $thisVMPath -Recurse -Force -ErrorAction SilentlyContinue
 
         $SCMPath = New-Item -Path (Join-Path $thisVMPath 'SCM') -ItemType Directory -Force
         $SSDPath = New-Item -Path (Join-Path $thisVMPath 'SSD') -ItemType Directory -Force
         $HDDPath = New-Item -Path (Join-Path $thisVMPath 'HDD') -ItemType Directory -Force
 
-        0..($numSCMDrives - 1) | ForEach-Object {
-            $diskExist = Get-Item "$SCMPath\$(($thisVM.Name).Split('.')[0])-SCM-$_.VHDX" -ErrorAction SilentlyContinue
+        $theseSCMDrives = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SCMDrives
+        $theseSSDDrives = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives
+        $theseHDDDrives = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives
 
-            if (-not($diskExist)) {
-                #Note: for some strange reason, only this section must be split to variable unlike the others below; not sure why but there's a weird error
-                # Using the temp variable to get around this for the time being
-                $temp = $(($thisVM.Name).Split('.')[0])
-                New-VHD -Path "$SCMPath\$temp-SCM-$_.VHDX" -Dynamic -SizeBytes 32GB -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+        Write-Host "`n `nCreating drives for $($thisVM.Name)"
 
-                Remove-Variable temp
+        # After Lab Environment is deployed, there should be 1 SCSI controller for the OSD. This step will add 3 more. If this gets messed up re-run lab environment setup.
+        Write-Host "Creating SCSI Controllers for $($thisVM.Name)"
+        1..3 | Foreach-Object { Add-VMScsiController -VMName $thisVM.Name -ErrorAction SilentlyContinue }
+
+        Write-Host "Creating SCM Drives for $($thisVM.Name)"
+        $theseSCMDrives | ForEach-Object {
+            $thisDrive = $_
+
+            0..($theseSCMDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SCMPath\$($thisVM.Name)-SCM-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue }
+
+            0..($theseSCMDrives.Count - 1) | ForEach-Object {
+                #Note: Keep this separate to avoid disk creation race
+
+                Write-Host "`t Attaching SCM Drive from: $($SCMPath)\$($thisVM.Name)-SCM-$_.VHDX"
+                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SCMPath\$($thisVM.Name)-SCM-$_.VHDX" -ControllerType SCSI -ControllerNumber 1 -ControllerLocation $_ -ErrorAction SilentlyContinue
             }
         }
 
-        0..($numSSDDrives - 1) | ForEach-Object {
-            $diskExist = Get-Item "$SSDPath\$(($thisVM.Name).Split('.')[0])-SSD-$_.VHDX" -ErrorAction SilentlyContinue
+        Write-Host "`n Creating SSD Drives for $($thisVM.Name)"
+        $theseSSDDrives | ForEach-Object {
+            $thisDrive = $_
 
-            if (!($diskExist)) {
-                New-VHD -Path "$SSDPath\$(($thisVM.Name).Split('.')[0])-SSD-$_.VHDX" -Dynamic –Size 256GB -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+            0..($theseSSDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SSDPath\$($thisVM.Name)-SSD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue }
+
+            0..($theseSSDDrives.Count - 1) | ForEach-Object {
+                #Note: Keep this separate to avoid disk creation race
+
+                Write-Host "`t Attaching SSD Drive from: $($SSDPath)\$($thisVM.Name)-SSD-$_.VHDX"
+                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SSDPath\$($thisVM.Name)-SSD-$_.VHDX" -ControllerType SCSI -ControllerNumber 2 -ControllerLocation $_ -ErrorAction SilentlyContinue
             }
         }
 
-        0..($numCapDrives - 1) | ForEach-Object {
-            $diskExist = Get-Item "$HDDPath\$(($thisVM.Name).Split('.')[0])-HDD-$_.VHDX" -ErrorAction SilentlyContinue
+        Write-Host "`n Creating HHD Drives for $($thisVM.Name)"
+        $theseHDDDrives | ForEach-Object {
+            $thisDrive = $_
 
-            if (!($diskExist)) {
-                New-VHD -Path "$HDDPath\$(($thisVM.Name).Split('.')[0])-HDD-$_.VHDX" -Dynamic –Size 1TB -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+            0..($theseHDDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$HDDPath\$($thisVM.Name)-HDD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue }
+
+            0..($theseHDDDrives.Count - 1) | ForEach-Object {
+                #Note: Keep this separate to avoid disk creation race
+
+                Write-Host "`t Attaching HDD Drive from: $($HDDPath)\$($thisVM.Name)-HDD-$_.VHDX"
+                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$HDDPath\$($thisVM.Name)-HDD-$_.VHDX" -ControllerType SCSI -ControllerNumber 3 -ControllerLocation $_ -ErrorAction SilentlyContinue
             }
-        }
-
-
-        # This needs to be beefed up so it always adds 4 adapters
-        if ( (Get-VMScsiController -VMName $thisVM.Name).Count -lt 4 ) { Add-VMScsiController -VMName $ThisVM.Name }
-
-        0..($numSCMDrives - 1) | ForEach-Object {
-            Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SCMPath\$(($thisVM.Name).Split('.')[0])-SCM-$_.VHDX" -ControllerType SCSI -ControllerNumber 1 -ControllerLocation $_ -ErrorAction SilentlyContinue
-        }
-
-        0..($numSSDDrives - 1)  | ForEach-Object {
-            Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SSDPath\$(($thisVM.Name).Split('.')[0])-SSD-$_.VHDX" -ControllerType SCSI -ControllerNumber 2 -ControllerLocation $_ -ErrorAction SilentlyContinue
-        }
-
-        0..($numCapDrives - 1)   | ForEach-Object {
-            Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$HDDPath\$(($thisVM.Name).Split('.')[0])-HDD-$_.VHDX" -ControllerType SCSI -ControllerNumber 3 -ControllerLocation $_ -ErrorAction SilentlyContinue
         }
     }
 
     #Setup guest adapters on the host
-    $VMs | ForEach-Object {
+    $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
+
+        Write-Host "`n `nCreating adapters for $($thisVM.Name)"
+
+        $theseAdapters = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.Adapters
 
         # Make sure VMs have 5 NICs - 1 Mgmt NIC and 4 NICs for other stuff - if more than 5 NICs exist, they will not be removed
         if ($thisVM.NetworkAdapters.Count -lt 5) {
@@ -294,7 +311,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
     }
 
     # Begin configuration in the VMs
-    Reset-AzStackVMs -Start
+    Reset-AzStackVMs -Start -
 
     # Cleanup ghost NICs in Guest
     $VMs | ForEach-Object {
@@ -392,11 +409,11 @@ Function Invoke-AzureStackHCILabVMCustomization {
                 Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "PMEM$($_.DeviceID)" -MediaType SCM
             }
 
-            Get-PhysicalDisk | ? Size -eq 256GB | Sort Number | ForEach-Object {
+            Get-PhysicalDisk | Where-Object Size -eq 256GB | Sort-Object Number | ForEach-Object {
                 Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "SSD$($_.DeviceID)" -MediaType SSD
             }
 
-            Get-PhysicalDisk | ? Size -eq 1TB | Sort Number | ForEach-Object {
+            Get-PhysicalDisk | Where-Object Size -eq 1TB | Sort-Object Number | ForEach-Object {
                 Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "HDD$($_.DeviceID)" -MediaType HDD
             }
         }
@@ -458,10 +475,10 @@ Function Initialize-AzureStackHCILabOrchestration {
     Approve-AzureStackHCILabHostState -Test Host
 
 # Initialize lab environment
-    New-AzureStackHCILabEnvironment
+    #New-AzureStackHCILabEnvironment
 
 # Invoke VMs with appropriate configurations
-    #Invoke-AzureStackHCILabVMCustomization
+    Invoke-AzureStackHCILabVMCustomization
 }
 
 #TODO: Add logging to Restart and shutdown for Reset-AzStackVM
