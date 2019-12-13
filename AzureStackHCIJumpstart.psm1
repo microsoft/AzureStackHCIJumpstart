@@ -236,13 +236,13 @@ Function Invoke-AzureStackHCILabVMCustomization {
         $theseSCMDrives | ForEach-Object {
             $thisDrive = $_
 
-            0..($theseSCMDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SCMPath\$($thisVM.Name)-SCM-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue }
+            0..($theseSCMDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SCMPath\$($thisVM.Name)-SCM-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
 
             0..($theseSCMDrives.Count - 1) | ForEach-Object {
                 #Note: Keep this separate to avoid disk creation race
 
                 Write-Host "`t Attaching SCM Drive from: $($SCMPath)\$($thisVM.Name)-SCM-$_.VHDX"
-                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SCMPath\$($thisVM.Name)-SCM-$_.VHDX" -ControllerType SCSI -ControllerNumber 1 -ControllerLocation $_ -ErrorAction SilentlyContinue
+                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SCMPath\$($thisVM.Name)-SCM-$_.VHDX" -ControllerType SCSI -ControllerNumber 1 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
             }
         }
 
@@ -250,13 +250,13 @@ Function Invoke-AzureStackHCILabVMCustomization {
         $theseSSDDrives | ForEach-Object {
             $thisDrive = $_
 
-            0..($theseSSDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SSDPath\$($thisVM.Name)-SSD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue }
+            0..($theseSSDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SSDPath\$($thisVM.Name)-SSD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
 
             0..($theseSSDDrives.Count - 1) | ForEach-Object {
                 #Note: Keep this separate to avoid disk creation race
 
                 Write-Host "`t Attaching SSD Drive from: $($SSDPath)\$($thisVM.Name)-SSD-$_.VHDX"
-                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SSDPath\$($thisVM.Name)-SSD-$_.VHDX" -ControllerType SCSI -ControllerNumber 2 -ControllerLocation $_ -ErrorAction SilentlyContinue
+                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SSDPath\$($thisVM.Name)-SSD-$_.VHDX" -ControllerType SCSI -ControllerNumber 2 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
             }
         }
 
@@ -264,13 +264,13 @@ Function Invoke-AzureStackHCILabVMCustomization {
         $theseHDDDrives | ForEach-Object {
             $thisDrive = $_
 
-            0..($theseHDDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$HDDPath\$($thisVM.Name)-HDD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue }
+            0..($theseHDDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$HDDPath\$($thisVM.Name)-HDD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
 
             0..($theseHDDDrives.Count - 1) | ForEach-Object {
                 #Note: Keep this separate to avoid disk creation race
 
                 Write-Host "`t Attaching HDD Drive from: $($HDDPath)\$($thisVM.Name)-HDD-$_.VHDX"
-                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$HDDPath\$($thisVM.Name)-HDD-$_.VHDX" -ControllerType SCSI -ControllerNumber 3 -ControllerLocation $_ -ErrorAction SilentlyContinue
+                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$HDDPath\$($thisVM.Name)-HDD-$_.VHDX" -ControllerType SCSI -ControllerNumber 3 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
             }
         }
     }
