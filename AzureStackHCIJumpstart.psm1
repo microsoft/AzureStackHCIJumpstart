@@ -346,20 +346,21 @@ Function Invoke-AzureStackHCILabVMCustomization {
             }
         }
 
-<#
         Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
             Foreach ($vNIC in $RenameVMNic) {
-                #Note: Set to temp name first in case there are conflicts
-                $Guid = $(((New-Guid).Guid).Substring(0,10))
-                Rename-NetAdapter -Name $vNIC.Name -NewName "$($vNIC.DisplayValue)_Temp$Guid"
+                #Note: Set to temp name first in case there are conflicts when running again
+                $Guid = $(((New-Guid).Guid).Substring(0,15))
+                Rename-NetAdapter -Name $vNIC.Name -NewName $Guid
             }
 
+            #Note: Sleep to avoid race
+            Start-Sleep -Seconds 3
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
-            Foreach ($vNIC in $RenameVMNic) { Rename-NetAdapter -Name $vNIC.Name -NewName "$($vNIC.DisplayValue)" }
+            Foreach ($vmNIC in $RenameVMNic) { Rename-NetAdapter -Name $vmNIC.Name -NewName "$($vmNIC.DisplayValue)" }
         }
-#>
+
         Write-Host "Modifying Interface Description to replicate real NICs in guest: $($thisVM.Name)"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
             $interfaces = Get-NetAdapter | Sort-Object MacAddress
@@ -370,9 +371,11 @@ Function Invoke-AzureStackHCILabVMCustomization {
                         Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
                             $psPath = $_.PSPath
                             $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
-                                        Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
+                                                    Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
 
                             if ($friendlyPath -ne $null) {
+                                #$Guid = $(((New-Guid).Guid).Substring(0,10))
+                                #Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value $GUID
                                 Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC'
                             }
                         }
@@ -382,9 +385,11 @@ Function Invoke-AzureStackHCILabVMCustomization {
                         Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
                             $psPath = $_.PSPath
                             $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
-                                        Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
+                                                Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
 
                             if ($friendlyPath -ne $null) {
+                                #$Guid = $(((New-Guid).Guid).Substring(0,10))
+                                #Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value $GUID
                                 Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC #2'
                             }
                         }
@@ -400,9 +405,13 @@ Function Invoke-AzureStackHCILabVMCustomization {
                                 $intNum = $(($interface.Name -split ' ')[1])
 
                                 if ($intNum -eq $null) {
+                                    #$Guid = $(((New-Guid).Guid).Substring(0,10))
+                                    #Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value $GUID
                                     Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262"
                                 }
                                 Else {
+                                    #$Guid = $(((New-Guid).Guid).Substring(0,10))
+                                    #Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value $GUID
                                     Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262 #$intNum"
                                 }
 
@@ -490,7 +499,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     Approve-AzureStackHCILabHostState -Test Host
 
 # Initialize lab environment
-    #New-AzureStackHCILabEnvironment
+    New-AzureStackHCILabEnvironment
 
 # Invoke VMs with appropriate configurations
     Invoke-AzureStackHCILabVMCustomization

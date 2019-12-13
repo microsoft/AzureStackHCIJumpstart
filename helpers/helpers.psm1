@@ -21,8 +21,7 @@ Function Get-LabConfig {
         VMs = @()
     }
 
-    #1..4 | ForEach-Object {
-    1 | ForEach-Object {
+    1..4 | ForEach-Object {
         $LABConfig.VMs += @{
             VMName        = "0$_"
 
