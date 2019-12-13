@@ -329,14 +329,14 @@ Function Invoke-AzureStackHCILabVMCustomization {
         $AllVMs += Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
     }
 
+    Write-Host "Starting VMs to continue configuration inside the guest"
     Reset-AzStackVMs -Start -VMs $AllVMs -Wait
     Remove-Variable AllVMs
 
-    Write-Host "Starting VMs to continue configuration inside the guest"
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
 
-        Write-Host "`t Checking for and removing any Ghost NICs in $($thisVM.Name)"
+        Write-Host "`t Removing any Ghost NICs in $($thisVM.Name)"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
             $ghosts = Get-PnpDevice -class net | Where-Object Status -eq Unknown | Select-Object FriendlyName,InstanceId
 
@@ -346,11 +346,14 @@ Function Invoke-AzureStackHCILabVMCustomization {
             }
         }
 
+        Write-Host "`t Rebooting to finalize ghost NIC removal"
+        Reset-AzStackVMs -Start -VMs $AzureStackHCIVMs -Wait
+
         Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
-        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -remote -ScriptBlock {
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
             Foreach ($vNIC in $RenameVMNic) {
-                #Note: Set to temp name first in case there are conflicts when running again
+                #Note: Temp rename to avoid conflicts e.g. Ethernet should be adapter1 but is adapter2; renaming adapter2 first is necessary
                 $Guid = $(((New-Guid).Guid).Substring(0,15))
                 Rename-NetAdapter -Name $vNIC.Name -NewName $Guid
             }
@@ -358,7 +361,10 @@ Function Invoke-AzureStackHCILabVMCustomization {
             #Note: Sleep to avoid race
             Start-Sleep -Seconds 3
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
-            Foreach ($vmNIC in $RenameVMNic) { Rename-NetAdapter -Name $vmNIC.Name -NewName "$($vmNIC.DisplayValue)" }
+            Foreach ($vmNIC in $RenameVMNic) {
+                $VerbosePreference = 'continue'
+                Rename-NetAdapter -Name $vmNIC.Name -NewName "$($vmNIC.DisplayValue)"
+            }
         }
 
         Write-Host "Modifying Interface Description to replicate real NICs in guest: $($thisVM.Name)"
@@ -499,7 +505,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     Approve-AzureStackHCILabHostState -Test Host
 
 # Initialize lab environment
-    New-AzureStackHCILabEnvironment
+    #New-AzureStackHCILabEnvironment
 
 # Invoke VMs with appropriate configurations
     Invoke-AzureStackHCILabVMCustomization
