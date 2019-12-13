@@ -637,5 +637,17 @@ Function Convert-FromDiffDisk {
     Add-VMHardDiskDrive -VM $VM -Path $BaseDiskPath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
 }
 
+Function Import-TempModules {
+    #Note: These are required until this entire package is published in the PoSH gallery. Once completed, requiredmodules will be used in the manifest.
+
+    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
+        Get-Module -Name $_.Name | Remove-Module -Force -ErrorAction SilentlyContinue
+    }
+
+    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
+        Import-Module -Name $_.FullName -Force -Global -ErrorAction SilentlyContinue
+    }
+}
+
 #TODO: Add other VMs
 #TODO: Instead of copying DSC File to pending, just start the VM, then invoke-dsc

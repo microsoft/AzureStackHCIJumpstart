@@ -81,6 +81,8 @@ Function Remove-AzureStackHCILabEnvironment {
     Write-Host 'Clean is finished...Exiting'
 }
 Function New-AzureStackHCILabEnvironment {
+    Import-TempModules
+
     # Hydrate base disk
     New-BaseDisk
 
@@ -131,9 +133,8 @@ Function New-AzureStackHCILabEnvironment {
     }
 
     # Configure Lab Domain
-    $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' } | Foreach-Object {
-        $DC = Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
-    }
+    $DCName = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
+    $DC     = Get-VM -VMName "$($LabConfig.Prefix)$($DCName.VMName)" -ErrorAction SilentlyContinue
 
     Write-Host "Configuring DC using DSC takes a while. Please be patient"
 
@@ -147,6 +148,7 @@ Function New-AzureStackHCILabEnvironment {
     $LabConfig.VMs.Where{ $_.Role -ne 'Domain Controller' } | Foreach-Object {
         $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
         Write-Host "Joining $thisSystem to domain"
+
 #TODO: Only do this if not already joined
         $thisDomain = $LabConfig.DomainNetbiosName
         Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
@@ -347,7 +349,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
         }
 
         Write-Host "`t Rebooting to finalize ghost NIC removal"
-        Reset-AzStackVMs -Start -VMs $AzureStackHCIVMs -Wait
+        Reset-AzStackVMs -Restart -VMs $AzureStackHCIVMs -Wait
 
         Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -remote -ScriptBlock {
@@ -450,7 +452,6 @@ Function Invoke-AzureStackHCILabVMCustomization {
     }
 }
 
-
 Function Initialize-AzureStackHCILabOrchestration {
 <#
     .SYNOPSIS
@@ -493,7 +494,7 @@ Function Initialize-AzureStackHCILabOrchestration {
 #>
     Clear-Host
 
-    $here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+    $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
     Write-Host "Azure Stack HCI Jumpstart module is running from: $here"
 
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
@@ -501,11 +502,13 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     $global:LabConfig = Get-LabConfig
 
+    Write-Host "Temporarily (till everything is published in the PoSH gallery) importing modules from $here\helpers"
+    Import-TempModules
 # Check that the host is ready with approve host state
     Approve-AzureStackHCILabHostState -Test Host
 
 # Initialize lab environment
-    #New-AzureStackHCILabEnvironment
+    New-AzureStackHCILabEnvironment
 
 # Invoke VMs with appropriate configurations
     Invoke-AzureStackHCILabVMCustomization

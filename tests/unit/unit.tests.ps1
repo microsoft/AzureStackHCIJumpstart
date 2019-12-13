@@ -9,17 +9,24 @@ Describe 'Host Validation' -Tags Host {
         }
 
         #TODO: Just grab the actual module manifest from the imported module instead
-        $manifest = Import-Module "$here\AzureStackHCIJumpstart.psd1"
+        $RequiredModules = (Get-Module -Name AzureStackHCIJumpstart).RequiredModules
 
-        $manifest.RequiredModules | ForEach-Object {
+        $RequiredModules.GetEnumerator() | ForEach-Object {
             $thisModule = $_
 
-            It "${env:ComputerName} Should have the required module: $thisModule" {
+            Remove-Variable module -ErrorAction SilentlyContinue
+            $module = Get-Module $thisModule.Name -ListAvailable -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
 
+            It "[TestHost: ${env:ComputerName}] Must have the module [$($thisModule.Name)] available" {
+                $module.Name | Should Not BeNullOrEmpty
+            }
+
+            It "[TestHost: ${env:ComputerName}] Must be at least version [$($thisModule.Version)]" {
+                $module.version -ge $_.ModuleVersion | Should be $true
             }
         }
 
-        $HyperVInstallationState = (Get-WindowsFeature | Where Name -like *Hyper-V* -ErrorAction SilentlyContinue)
+        $HyperVInstallationState = (Get-WindowsFeature | Where-Object Name -like *Hyper-V* -ErrorAction SilentlyContinue)
 
         $HyperVInstallationState | ForEach-Object {
             It "${env:ComputerName} must have $($_.Name) installed" {
