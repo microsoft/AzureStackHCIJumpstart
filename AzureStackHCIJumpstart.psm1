@@ -185,7 +185,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
     # Most of these actions require the VMs to be shutdown
     Reset-AzStackVMs -Shutdown -VMs $AzureStackHCIVMs
 
-    # Make sure nesting is enabled; Remove existing drives (except OS); Remove existing NICs (except OS)
+    # Cleanup; Make sure nesting is enabled; Remove existing drives (except OS); Remove existing NICs (except OS)
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
         $NestedEnabled = (Get-VMProcessor -VMName $thisVM.VMName).ExposeVirtualizationExtensions
@@ -203,10 +203,10 @@ Function Invoke-AzureStackHCILabVMCustomization {
                 }
             }
 
-            if ($thisSCSIController.ControllerNumber -ne 0) { Remove-VMScsiController -VMName $thisVM.VMName -ControllerNumber $thisSCSIController.ControllerNumber }
+            if ($thisSCSIController.ControllerNumber -ne 0) { Remove-VMScsiController -VMName $thisVM.VMName -ControllerNumber 1 }
         }
 
-        Write-Host "Remove virtual adapters from: $($thisVM.VMName)"
+        Write-Host "Removing virtual adapters from: $($thisVM.VMName)"
         Get-VMNetworkAdapter -VMName $thisVM.VMName | ForEach-Object {
             Remove-VMNetworkAdapter -VMName $thisVM.VMName
         }
@@ -275,101 +275,118 @@ Function Invoke-AzureStackHCILabVMCustomization {
         }
     }
 
+    Write-Host "`nBeginning Adapter configuration"
     #Setup guest adapters on the host
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
 
-        Write-Host "`n `nCreating adapters for $($thisVM.Name)"
-
+        Write-Host "Creating adapters for $($thisVM.Name)"
         $theseAdapters = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.Adapters
 
-        # Make sure VMs have 5 NICs - 1 Mgmt NIC and 4 NICs for other stuff - if more than 5 NICs exist, they will not be removed
-        if ($thisVM.NetworkAdapters.Count -lt 5) {
-            ($thisVM.NetworkAdapters.Count + 1)..5 | ForEach-Object {
-                Add-VMNetworkAdapter -VMName $thisVM.Name -SwitchName $HostVMSwitchName
-            }
+        #Note: There shouldn't be any NICs in the system at this point, so just add however many you in $theseAdapters
+        1..$theseAdapters.Count | Foreach-Object {
+            Add-VMNetworkAdapter -VMName $thisVM.Name -SwitchName "$($LabConfig.SwitchName)*"
         }
+    }
+
+    #Note: Start to get a MAC on the vNICs to sort them in the future
+    Reset-AzStackVMs -Start -VMs $AzureStackHCIVMs
+
+    Reset-AzStackVMs -Stop -VMs $AzureStackHCIVMs
+
+    $AzureStackHCIVMs | ForEach-Object {
+        $thisVM = $_
 
         # Enable Device Naming; attach to the vSwitch; Trunk all possible vlans so that we can set a vlan inside the VM
         $vmAdapters = Get-VMNetworkAdapter -VMName $thisVM.Name | Sort-Object MacAddress
+
         $vmAdapters | ForEach-Object {
             Set-VMNetworkAdapter -VMNetworkAdapter $_ -DeviceNaming On
-            Connect-VMNetworkAdapter -VMNetworkAdapter $_ -SwitchName $HostVMSwitchName
-            Set-VMNetworkAdapterVlan -VMName $vmAdapters.VMName -VMNetworkAdapterName $NIC.Name -Trunk -AllowedVlanIdList 1-4094 -NativeVlanId 0
+            Set-VMNetworkAdapterVlan -VMName $thisVM.Name -VMNetworkAdapterName $_.Name -Trunk -AllowedVlanIdList 1-4094 -NativeVlanId 0
         }
 
-        # Rename adapters in Hyper-V so this will propagate through into the Guest
-        Rename-VMNetworkAdapter -VMNetworkAdapter ($vmAdapters | Select-Object -first 1) -NewName 'Mgmt01'
+        Write-Host "Renaming vmNICs for propagation through to the $($thisVM.Name)"
 
-        $Count = 0
-        foreach ($NIC in ($vmAdapters | Select-Object -Skip 1)) {
-            if ($Count -eq 0) { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName 'Ethernet' }
-            Else { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName "Ethernet $Count" }
+        #Note: Naming the first 2 Mgmt for easy ID. This can be updated; just trying to keep it simple
+        $AdapterCount = 1
+        foreach ($NIC in ($vmAdapters | Select-Object -First 2)) {
+            Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName "Mgmt0$AdapterCount"
 
-            $Count = $Count + 1
+            $AdapterCount ++
+        }
+
+        $AdapterCount = 0
+        foreach ($NIC in ($vmAdapters | Select-Object -Skip 2)) {
+            if ($AdapterCount -eq 0) { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName 'Ethernet' }
+            Else { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName "Ethernet $AdapterCount" }
+
+            $AdapterCount ++
         }
     }
 
-    # Begin configuration in the VMs
-    Reset-AzStackVMs -Start -
+    $AllVMs = @()
+    $LabConfig.VMs | ForEach-Object {
+        $AllVMs += Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
+    }
 
-    # Cleanup ghost NICs in Guest
-    $VMs | ForEach-Object {
+    Reset-AzStackVMs -Start -VMs $AllVMs -Wait
+    Remove-Variable AllVMs
+
+    Write-Host "Starting VMs to continue configuration inside the guest"
+    $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
+
+        Write-Host "`t Checking for and removing any Ghost NICs in $($thisVM.Name)"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            $ghosts = Get-PnpDevice -class net | Where-Object Status -eq Unknown | Select-Object FriendlyName,InstanceId
 
-            $Devs = Get-PnpDevice -class net | Where-Object Status -eq Unknown | Select-Object FriendlyName,InstanceId
-
-            ForEach ($Dev in $Devs) {
-                $RemoveKey = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($Dev.InstanceId)"
+            ForEach ($ghost in $ghosts) {
+                $RemoveKey = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($ghost.InstanceId)"
                 Get-Item $RemoveKey | Select-Object -ExpandProperty Property | Foreach-Object { Remove-ItemProperty -Path $RemoveKey -Name $_ }
-
-                Write-Host "Removing: $RemoveKey"
             }
         }
-    }
 
-    # NIC Naming in Guest
-    $VMs | ForEach-Object {
-        Invoke-Command -VMName $_.Name -Credential $VMCred -ScriptBlock {
-            $thisVM = $_
-
-            # Rename NICs in Guest based on CDN name on Host
-            $RenameVNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
-
-            Foreach ($vNIC in $RenameVNic) {
-                # Set to temp name first in case there are conflicts
-                Rename-NetAdapter -Name $Vnic.Name -NewName "$($vNIC.DisplayValue)_Temp"
+<#
+        Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
+            Foreach ($vNIC in $RenameVMNic) {
+                #Note: Set to temp name first in case there are conflicts
+                $Guid = $(((New-Guid).Guid).Substring(0,10))
+                Rename-NetAdapter -Name $vNIC.Name -NewName "$($vNIC.DisplayValue)_Temp$Guid"
             }
 
-            $RenameVNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
-
-            Foreach ($vNIC in $RenameVNic) {
-                Rename-NetAdapter -Name $Vnic.Name -NewName "$($vNIC.DisplayValue)"
-            }
+            $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
+            Foreach ($vNIC in $RenameVMNic) { Rename-NetAdapter -Name $vNIC.Name -NewName "$($vNIC.DisplayValue)" }
         }
-    }
-
-    # Modify Interface Description to replicate real NICs in Guest
-    $VMs | ForEach-Object {
-        Invoke-Command -VMName $_.Name -Credential $VMCred -ScriptBlock {
-            $interfaces = Get-NetAdapter
+#>
+        Write-Host "Modifying Interface Description to replicate real NICs in guest: $($thisVM.Name)"
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            $interfaces = Get-NetAdapter | Sort-Object MacAddress
 
             foreach ($interface in $interfaces) {
-
                 Switch -Wildcard ($interface.Name) {
                     'Mgmt01' {
                         Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
                             $psPath = $_.PSPath
-                            $temp = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
+                            $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
                                         Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
 
-                            if ($null -ne $temp) {
-                                $ThisInterface = $temp
-                                Set-ItemProperty -Path $ThisInterface.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC'
+                            if ($friendlyPath -ne $null) {
+                                Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC'
                             }
+                        }
+                    }
 
-                            $thisInterface = $null
+                    'Mgmt02' {
+                        Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                            $psPath = $_.PSPath
+                            $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
+                                        Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
+
+                            if ($friendlyPath -ne $null) {
+                                Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC #2'
+                            }
                         }
                     }
 
@@ -379,41 +396,39 @@ Function Invoke-AzureStackHCILabVMCustomization {
                             $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
                                                 Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
 
-                            if ($null -ne $friendlyPath) {
+                            if ($friendlyPath -ne $null) {
                                 $intNum = $(($interface.Name -split ' ')[1])
 
-                                if ($null -eq $intNum) {
-                                    $ThisInterface = $friendlyPath
-                                    Set-ItemProperty -Path $ThisInterface.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262"
+                                if ($intNum -eq $null) {
+                                    Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262"
                                 }
                                 Else {
-                                    $ThisInterface = $friendlyPath
-                                    Set-ItemProperty -Path $ThisInterface.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262 #$intNum"
+                                    Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262 #$intNum"
                                 }
 
                                 $intNum = $null
                             }
-
-                            $thisInterface = $null
                         }
                     }
                 }
             }
         }
-    }
 
-    # Set Media Type for drives and rename
-    $VMs | ForEach-Object {
-        Invoke-Command -VMName $_.Name -Credential $VMCred -ScriptBlock {
-            Get-PhysicalDisk | Where-Object Size -eq 32GB | Sort-Object Number | ForEach-Object {
+        $theseSCMDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SCMDrives.Size / 1GB
+        $theseSSDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives.Size / 1GB
+        $theseHDDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives.Size / 1GB
+
+        Write-Host "`t Setting media type for the disks"
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            Get-PhysicalDisk | Where-Object Size -eq $using:theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
                 Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "PMEM$($_.DeviceID)" -MediaType SCM
             }
 
-            Get-PhysicalDisk | Where-Object Size -eq 256GB | Sort-Object Number | ForEach-Object {
+            Get-PhysicalDisk | Where-Object Size -eq $using:theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
                 Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "SSD$($_.DeviceID)" -MediaType SSD
             }
 
-            Get-PhysicalDisk | Where-Object Size -eq 1TB | Sort-Object Number | ForEach-Object {
+            Get-PhysicalDisk | Where-Object Size -eq $using:theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
                 Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "HDD$($_.DeviceID)" -MediaType HDD
             }
         }
@@ -481,6 +496,4 @@ Function Initialize-AzureStackHCILabOrchestration {
     Invoke-AzureStackHCILabVMCustomization
 }
 
-#TODO: Add logging to Restart and shutdown for Reset-AzStackVM
 #TODO: Cleanup todos
-#TODO: Add WAC System

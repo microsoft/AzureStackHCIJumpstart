@@ -1,3 +1,19 @@
+# Jumpstart your Azure Stack HCI Lab
+
+## Deployment
+
+### Deploy the entire lab with customization
+```Initialize-AzureStackHCILabOrchestration```
+
+## Destruction
+
+**Removes all HCI VMs (Hyper-V Hosts and WAC VM)**
+```Remove-AzureStackHCILabEnvironment```
+
+**Additionally removes the domain controller, virtual switch, and base disk**
+```Remove-AzureStackHCILabEnvironment -FireAndBrimstone```
+
+
 
 # Contributing
 

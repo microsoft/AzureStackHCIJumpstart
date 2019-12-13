@@ -21,7 +21,8 @@ Function Get-LabConfig {
         VMs = @()
     }
 
-    1..4 | ForEach-Object {
+    #1..4 | ForEach-Object {
+    1 | ForEach-Object {
         $LABConfig.VMs += @{
             VMName        = "0$_"
 
@@ -57,7 +58,7 @@ Function Get-LabConfig {
         Role          = 'WAC'
         Configuration = 'Simple'
         ParentVHD          = 'BaseDisk_19507.vhdx'
-        MemoryStartupBytes = 8192MB
+        MemoryStartupBytes = 8GB
         EnableWinRM        = $True
     }
 
@@ -68,7 +69,7 @@ Function Get-LabConfig {
         Role          = 'Domain Controller'
         Configuration = 'Simple'
         ParentVHD          = 'BaseDisk_19507.vhdx'
-        MemoryStartupBytes = 8192MB
+        MemoryStartupBytes = 8GB
         EnableWinRM        = $True
     }
 
@@ -138,6 +139,8 @@ Function Reset-AzStackVMs {
 
         [Switch] $Shutdown ,
 
+        [Switch] $Stop     ,
+
         [Switch] $Wait     ,
 
         [Microsoft.HyperV.PowerShell.VirtualMachine[]] $VMs
@@ -157,6 +160,12 @@ Function Reset-AzStackVMs {
 
     If ($Shutdown) {
         $VMs | ForEach-Object { Stop-VM -VMName $_.Name -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue }
+
+        If ($Wait) { Wait-ForHeartbeatState -State On -VMs $VMs }
+    }
+
+    If ($Stop) {
+        $VMs | ForEach-Object { Stop-VM -VMName $_.Name -TurnOff -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue }
 
         If ($Wait) { Wait-ForHeartbeatState -State On -VMs $VMs }
     }
