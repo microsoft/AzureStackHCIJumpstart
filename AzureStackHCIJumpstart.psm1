@@ -156,7 +156,7 @@ Function New-AzureStackHCILabEnvironment {
     }
 
     Write-Host 'Shutting down VMs for Merge'
-    Reset-AzStackVMs -Shutdown -VMs $AllVMs
+    Reset-AzStackVMs -Stop -VMs $AllVMs
 
     Remove-Variable VHDXToConvert, BaseDiskPath -ErrorAction SilentlyContinue
 
@@ -185,6 +185,9 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
     # Most of these actions require the VMs to be shutdown
     Reset-AzStackVMs -Shutdown -VMs $AzureStackHCIVMs
+
+    # If shutdown failed/timed out, stop the VMs
+    Reset-AzStackVMs -Stop -VMs $AzureStackHCIVMs
 
     # Cleanup; Make sure nesting is enabled; Remove existing drives (except OS); Remove existing NICs (except OS)
     $AzureStackHCIVMs | ForEach-Object {
@@ -276,7 +279,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
         }
     }
 
-    Write-Host "`nBeginning Adapter configuration"
+    Write-Host "`n Beginning Adapter configuration"
     #Setup guest adapters on the host
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
@@ -292,7 +295,6 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
     #Note: Start to get a MAC on the vNICs to sort them in the future
     Reset-AzStackVMs -Start -VMs $AzureStackHCIVMs
-
     Reset-AzStackVMs -Stop -VMs $AzureStackHCIVMs
 
     $AzureStackHCIVMs | ForEach-Object {
@@ -343,27 +345,46 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
             ForEach ($ghost in $ghosts) {
                 $RemoveKey = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($ghost.InstanceId)"
+                $VerbosePreference = 'continue'
+                Write-Host "`t`t`t Removing Ghosts"
+                Write-Host "`t`t`t`t $($ghost.InstanceId)"
                 Get-Item $RemoveKey | Select-Object -ExpandProperty Property | Foreach-Object { Remove-ItemProperty -Path $RemoveKey -Name $_ }
             }
         }
 
+        #Note: Needs a clean reboot or the ghost NICs aren't removed; trying to shutdown instead because the reboot isn't working cleanly
         Write-Host "`t Rebooting to finalize ghost NIC removal"
-        Reset-AzStackVMs -Restart -VMs $AzureStackHCIVMs -Wait
+        Reset-AzStackVMs -Shutdown -VMs $AzureStackHCIVMs.Where{$_.Name -eq $thisVM.Name} -Wait
+        Reset-AzStackVMs -Start -VMs $AzureStackHCIVMs.Where{$_.Name -eq $thisVM.Name} -Wait
 
         Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            $VerbosePreference = 'continue'
+            Write-Host '------0rig----'
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
+            Write-Host "$RenameVMNic"
+            Write-Host '------Orig Complete----'
             Foreach ($vNIC in $RenameVMNic) {
-                #Note: Temp rename to avoid conflicts e.g. Ethernet should be adapter1 but is adapter2; renaming adapter2 first is necessary
                 $Guid = $(((New-Guid).Guid).Substring(0,15))
+                Write-Host "`t`t`t NIC being renamed: $($vNIC.Name)"
+                Write-Host "`t`t`t`t New NIC Name: $Guid"
+
+                #Note: Temp rename to avoid conflicts e.g. Ethernet should be adapter1 but is adapter2; renaming adapter2 first is necessary
                 Rename-NetAdapter -Name $vNIC.Name -NewName $Guid
             }
 
+            Write-Host '----After GUID change------'
+            $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
+            Write-Host "$RenameVMNic"
+
             #Note: Sleep to avoid race
             Start-Sleep -Seconds 3
-            $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
+
+            Write-Host '----Final------'
             Foreach ($vmNIC in $RenameVMNic) {
                 $VerbosePreference = 'continue'
+                Write-Host "`t`t`t NIC being renamed: $($vmNIC.name)"
+                Write-Host "`t`t`t`t New NIC Name: $($vmNIC.DisplayValue)"
                 Rename-NetAdapter -Name $vmNIC.Name -NewName "$($vmNIC.DisplayValue)"
             }
         }
@@ -381,8 +402,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
                                                     Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
 
                             if ($friendlyPath -ne $null) {
-                                #$Guid = $(((New-Guid).Guid).Substring(0,10))
-                                #Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value $GUID
+                                Write-Host "$($interface.Name) - Mgmt01"
                                 Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC'
                             }
                         }
@@ -395,8 +415,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
                                                 Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
 
                             if ($friendlyPath -ne $null) {
-                                #$Guid = $(((New-Guid).Guid).Substring(0,10))
-                                #Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value $GUID
+                                Write-Host "$($interface.Name) - Mgmt02"
                                 Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC #2'
                             }
                         }
@@ -412,13 +431,11 @@ Function Invoke-AzureStackHCILabVMCustomization {
                                 $intNum = $(($interface.Name -split ' ')[1])
 
                                 if ($intNum -eq $null) {
-                                    #$Guid = $(((New-Guid).Guid).Substring(0,10))
-                                    #Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value $GUID
+                                    Write-Host "$($interface.Name) - Ethernet 0"
                                     Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262"
                                 }
                                 Else {
-                                    #$Guid = $(((New-Guid).Guid).Substring(0,10))
-                                    #Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value $GUID
+                                    Write-Host "$($interface.Name) - Ethernet $intNum"
                                     Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262 #$intNum"
                                 }
 

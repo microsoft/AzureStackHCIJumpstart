@@ -12,7 +12,7 @@ Function Get-LabConfig {
         DomainName        = 'gotham.city'
 
         # This is the filepath to the ISO that will be used to deploy the lab VMs
-        ServerISOFolder   = 'C:\DataStore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
+        ServerISOFolder   = 'C:\datastore\VMs\19535.1000.191210-1422.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
         # This is the name of the switch to attach VMs to. This lab has DHCP so either make a private/internal vSwitch or i'm going to takeover your network
         # If the specified switch doesn't exist a private switch will be created AzureStackHCILab-Guid
@@ -158,15 +158,13 @@ Function Reset-AzStackVMs {
     }
 
     If ($Shutdown) {
-        $VMs | ForEach-Object { Stop-VM -VMName $_.Name -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue }
-
-        If ($Wait) { Wait-ForHeartbeatState -State On -VMs $VMs }
+        $VMs | ForEach-Object { Stop-VM -VMName $_.Name }
+        If ($Wait) { Wait-ForHeartbeatState -State Off -VMs $VMs }
     }
 
     If ($Stop) {
         $VMs | ForEach-Object { Stop-VM -VMName $_.Name -TurnOff -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue }
-
-        If ($Wait) { Wait-ForHeartbeatState -State On -VMs $VMs }
+        If ($Wait) { Wait-ForHeartbeatState -State Off -VMs $VMs }
     }
 }
 #endregion
@@ -176,9 +174,9 @@ Function Reset-AzStackVMs {
 Function New-BaseDisk {
     Write-Host "`t Mounting ISO for Hydration"
     $MountedISO     = Mount-DiskImage -ImagePath $LabConfig.ServerISOFolder -PassThru -InformationAction SilentlyContinue
-    $ISODriveLetter = "$((Get-Volume -DiskImage $MountedISO).DriveLetter):"
-    $BuildNumber    = (Get-ItemProperty -Path (Join-Path -Path $ISODriveLetter -ChildPath "setup.exe")).VersionInfo.FileBuildPart
-    $WindowsImage   = Get-WindowsImage -ImagePath (Join-Path -Path $ISODriveLetter -ChildPath "sources\install.wim")
+    $ISODriveLetter = "$((Get-Volume -DiskImage $MountedISO -InformationAction SilentlyContinue).DriveLetter):"
+    $BuildNumber    = (Get-ItemProperty -Path (Join-Path -Path $ISODriveLetter -ChildPath "setup.exe") -InformationAction SilentlyContinue).VersionInfo.FileBuildPart
+    $WindowsImage   = Get-WindowsImage -ImagePath (Join-Path -Path $ISODriveLetter -ChildPath "sources\install.wim") -InformationAction SilentlyContinue
     $Edition = ($WindowsImage | Where-Object ImageName -like *Server*2019*Datacenter*Desktop*).ImageName
     $vhdname = "BaseDisk_$BuildNumber.vhdx"
     $global:VHDPath = "$VMPath\$vhdname"
@@ -188,11 +186,11 @@ Function New-BaseDisk {
     if (-not(Test-Path $VHDPath)) {
         Write-Host "`t Hydrating VHDX...Please be patient"
 
-        Convert-WindowsImage -SourcePath "$ISODriveLetter\sources\install.wim" -Edition $Edition -VHDPath $VHDPath -SizeBytes 100GB -VHDFormat VHDX -DiskLayout UEFI
+        Convert-WindowsImage -SourcePath "$ISODriveLetter\sources\install.wim" -Edition $Edition -VHDPath $VHDPath -SizeBytes 100GB -VHDFormat VHDX -DiskLayout UEFI | Out-Null
     }
 
     Write-Host "`t Dismounting ISO Image"
-    Dismount-DiskImage -ImagePath $LabConfig.ServerISOFolder -InformationAction SilentlyContinue
+    Dismount-DiskImage -ImagePath $LabConfig.ServerISOFolder -InformationAction SilentlyContinue | Out-Null
 }
 
 #Create Unattend for VHD
@@ -213,7 +211,7 @@ Function New-UnattendFileForVHD {
 
     if ( Test-Path "$Path\Unattend.xml" ) { Remove-Item "$Path\Unattend.xml" -InformationAction SilentlyContinue }
 
-    $unattendFile = New-Item "$Path\Unattend.xml" -type File -Force -InformationAction SilentlyContinue
+    New-Item "$Path\Unattend.xml" -type File -Force -OutVariable unattendFile | Out-Null
     $fileContent =  @"
 <?xml version='1.0' encoding='utf-8'?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -479,10 +477,10 @@ Function Initialize-BaseDisk {
 
     #create DSC MOF files
     Write-Host "`t Creating DSC Configs for DC"
-    LCMConfig   -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -InformationAction SilentlyContinue
+    LCMConfig   -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -InformationAction SilentlyContinue | Out-Null
 
     #TODO: Got to here last night
-    DCHydration -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -domainCred $localCred -InformationAction SilentlyContinue
+    DCHydration -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -domainCred $localCred -InformationAction SilentlyContinue | Out-Null
 }
 
 #Create Domain Controller VM and vSwitch for lab
