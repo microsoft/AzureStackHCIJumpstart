@@ -60,7 +60,7 @@ Function Remove-AzureStackHCILabEnvironment {
         $AzureStackHCIVMs += Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
     }
 
-    Reset-AzStackVMs -Shutdown -VMs $AllVMs
+    Reset-AzStackVMs -Stop -VMs $AllVMs
 
     If ($AzureStackHCIVMs -ne $null) {
         Write-Host "Destroying HCI VMs"
