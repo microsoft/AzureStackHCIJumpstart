@@ -80,6 +80,7 @@ Function Remove-AzureStackHCILabEnvironment {
 
     Write-Host 'Clean is finished...Exiting'
 }
+
 Function New-AzureStackHCILabEnvironment {
     Import-TempModules
 
@@ -497,13 +498,29 @@ Function Initialize-AzureStackHCILabOrchestration {
     $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
     Write-Host "Azure Stack HCI Jumpstart module is running from: $here"
 
+    #Note: These are required until this entire package is published in the PoSH gallery. Once completed, requiredmodules will be used in the manifest.
+
+    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
+        Get-Module -Name $_.Name | Remove-Module -Force -ErrorAction SilentlyContinue
+    }
+
+    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
+        $path     = $_.FullName
+        $destPath = "C:\Program Files\WindowsPowerShell\Modules\$_"
+
+        Copy-Item -Path $path -Recurse -Destination $destPath -Container -Force -ErrorAction SilentlyContinue
+
+        Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
+    }
+
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
     Import-Module $helperPath -Force
 
-    $global:LabConfig = Get-LabConfig
-
     Write-Host "Temporarily (till everything is published in the PoSH gallery) importing modules from $here\helpers"
     Import-TempModules
+
+    $global:LabConfig = Get-LabConfig
+
 # Check that the host is ready with approve host state
     Approve-AzureStackHCILabHostState -Test Host
 

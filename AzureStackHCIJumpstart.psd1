@@ -52,6 +52,7 @@
 
     # Modules that must be imported into the global environment prior to importing this module
     RequiredModules = @(
+        <#
         @{ ModuleName = 'Pester'; ModuleVersion = '4.9.0' }
         @{ ModuleName = 'Convert-WindowsImage'; ModuleVersion = '10.0' }
         @{ ModuleName = 'xActiveDirectory'; ModuleVersion = '3.0.0.0' }
@@ -59,6 +60,7 @@
         @{ ModuleName = 'xDNSServer'; ModuleVersion = '1.15.0.0' }
         @{ ModuleName = 'NetworkingDSC'; ModuleVersion = '7.4.0.0' }
         @{ ModuleName = 'xPSDesiredStateConfiguration'; ModuleVersion = '8.10.0.0' }
+        #>
     )
 
     # Assemblies that must be loaded prior to importing this module
