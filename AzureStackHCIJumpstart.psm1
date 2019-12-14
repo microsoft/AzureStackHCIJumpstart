@@ -82,8 +82,6 @@ Function Remove-AzureStackHCILabEnvironment {
 }
 
 Function New-AzureStackHCILabEnvironment {
-    Import-TempModules
-
     # Hydrate base disk
     New-BaseDisk
 
@@ -515,9 +513,6 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
     Import-Module $helperPath -Force
-
-    Write-Host "Temporarily (till everything is published in the PoSH gallery) importing modules from $here\helpers"
-    Import-TempModules
 
     $global:LabConfig = Get-LabConfig
 
