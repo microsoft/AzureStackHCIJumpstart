@@ -12,7 +12,7 @@ Function Get-LabConfig {
         DomainName        = 'gotham.city'
 
         # This is the filepath to the ISO that will be used to deploy the lab VMs
-        ServerISOFolder   = 'C:\datastore\VMs\19535.1000.191210-1422.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
+        ServerISOFolder   = 'C:\DataStore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
         # This is the name of the switch to attach VMs to. This lab has DHCP so either make a private/internal vSwitch or i'm going to takeover your network
         # If the specified switch doesn't exist a private switch will be created AzureStackHCILab-Guid
@@ -38,6 +38,7 @@ Function Get-LabConfig {
             SSDDrives = @{ Count = 4 ; Size  = 256GB }
             HDDDrives = @{ Count = 8 ; Size  = 1TB   }
 
+            #TODO: Adding NIC Naming differently than Mgmt and Ethernet
             Adapters = @(
                 #Note: Where/when needed, these will include a unique number to distinguish
                 @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
@@ -460,8 +461,7 @@ Function Initialize-BaseDisk {
     }
 
     If ($ConfigData -eq $null) {
-        Write-Host "ConfigData could not be generated for some reason, this will prevent the creation of the MOF file...Please investigate"
-        break
+        Write-Error "ConfigData could not be generated for some reason, this will prevent the creation of the MOF file...Please investigate" -ErrorAction Stop
     }
 
     #create LCM config
@@ -634,6 +634,3 @@ Function Convert-FromDiffDisk {
     Remove-VMHardDiskDrive -VMName $VM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI
     Add-VMHardDiskDrive -VM $VM -Path $BaseDiskPath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
 }
-
-#TODO: Add other VMs
-#TODO: Instead of copying DSC File to pending, just start the VM, then invoke-dsc

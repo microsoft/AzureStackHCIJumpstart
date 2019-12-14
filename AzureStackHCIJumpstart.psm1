@@ -1,7 +1,7 @@
-Function Approve-AzureStackHCILabHostState {
+Function Approve-AzureStackHCILabState {
     param(
         [Parameter(Mandatory=$True)]
-        [ValidateSet('Host')]
+        [ValidateSet('Host', 'Lab')]
         [String] $Test
     )
 
@@ -9,12 +9,20 @@ Function Approve-AzureStackHCILabHostState {
 
     Switch ($Test) {
         'Host' {
-            $ValidationResults = Invoke-Pester -Tag Host -Script "$here\tests\unit\unit.tests.ps1" -PassThru
+            $ValidationResults = Invoke-Pester -Tag Host -Script "$here\tests\unit\AzureStackHCILabHostState.unit.tests.ps1" -PassThru
             $ValidationResults | Select-Object -Property TagFilter, Time, TotalCount, PassedCount, FailedCount, SkippedCount, PendingCount | Format-Table -AutoSize
 
             If ($ValidationResults.FailedCount -ne 0) {
-                Write-Warning 'Prerequisite checks on the host have failed. Please review the output to identify the reason for the failures'
-                Break
+                Write-Error 'Prerequisite checks on the host have failed. Please review the output to identify the reason for the failures' -ErrorAction Stop
+            }
+        }
+
+        'Lab' {
+            $ValidationResults = Invoke-Pester -Tag Lab -Script "$here\tests\unit\AzureStackHCILabEnvironment.unit.tests.ps1" -PassThru
+            $ValidationResults | Select-Object -Property TagFilter, Time, TotalCount, PassedCount, FailedCount, SkippedCount, PendingCount | Format-Table -AutoSize
+
+            If ($ValidationResults.FailedCount -ne 0) {
+                Write-Error 'Prerequisite checks for the lab environment have failed. Please review the output or rerun New-AzureStackHCILabEnvironment' -ErrorAction Stop
             }
         }
     }
@@ -39,7 +47,7 @@ Function Remove-AzureStackHCILabEnvironment {
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
     Import-Module $helperPath -Force
 
-    $global:LabConfig = Get-LabConfig
+    if (-not ($labConfig)) { $global:LabConfig = Get-LabConfig }
 
     $AllVMs = @()
     $AzureStackHCIVMs = @()
@@ -82,6 +90,16 @@ Function Remove-AzureStackHCILabEnvironment {
 }
 
 Function New-AzureStackHCILabEnvironment {
+#region In case orchestration was not run
+    if (-not ($here)) { $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path }
+    if (-not (Get-Module -Name helpers)) {
+        $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
+        Import-Module $helperPath -Force
+    }
+
+    if (-not ($labConfig)) { $global:LabConfig = Get-LabConfig }
+#endregion
+
     # Hydrate base disk
     New-BaseDisk
 
@@ -178,6 +196,19 @@ Function New-AzureStackHCILabEnvironment {
 }
 
 Function Invoke-AzureStackHCILabVMCustomization {
+#region In case orchestration was not run
+    if (-not ($here)) { $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path }
+    if (-not (Get-Module -Name helpers)) {
+        $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
+        Import-Module $helperPath -Force
+    }
+
+    if (-not ($labConfig)) { $global:LabConfig = Get-LabConfig }
+#endregion
+
+    # Check that the environment is good to go e.g. in case New-AzureStackHCILabEnvironment wasn't called
+    Approve-AzureStackHCILabState -Test Lab
+
     $AzureStackHCIVMs = @()
     $LabConfig.VMs.Where{$_.Role -eq 'AzureStackHCI'} | ForEach-Object {
         $AzureStackHCIVMs += Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
@@ -389,7 +420,6 @@ Function Invoke-AzureStackHCILabVMCustomization {
                                                     Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
 
                             if ($friendlyPath -ne $null) {
-                                Write-Host "$($interface.Name) - Mgmt01"
                                 Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC'
                             }
                         }
@@ -402,7 +432,6 @@ Function Invoke-AzureStackHCILabVMCustomization {
                                                 Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
 
                             if ($friendlyPath -ne $null) {
-                                Write-Host "$($interface.Name) - Mgmt02"
                                 Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC #2'
                             }
                         }
@@ -418,11 +447,9 @@ Function Invoke-AzureStackHCILabVMCustomization {
                                 $intNum = $(($interface.Name -split ' ')[1])
 
                                 if ($intNum -eq $null) {
-                                    Write-Host "$($interface.Name) - Ethernet 0"
                                     Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262"
                                 }
                                 Else {
-                                    Write-Host "$($interface.Name) - Ethernet $intNum"
                                     Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262 #$intNum"
                                 }
 
@@ -495,6 +522,8 @@ Function Initialize-AzureStackHCILabOrchestration {
         More projects : https://aka.ms/HCI-Deployment
         Email Address : TODO
 #>
+    $StartTime = Get-Date
+
     Clear-Host
 
     $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
@@ -510,7 +539,7 @@ Function Initialize-AzureStackHCILabOrchestration {
         $path     = $_.FullName
         $destPath = "C:\Program Files\WindowsPowerShell\Modules\$_"
 
-        Copy-Item -Path $path -Recurse -Destination $destPath -Container -Force -ErrorAction SilentlyContinue
+        Copy-Item -Path $path -Recurse -Destination $destPath -Container -ErrorAction SilentlyContinue
 
         Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
     }
@@ -521,16 +550,19 @@ Function Initialize-AzureStackHCILabOrchestration {
     $global:LabConfig = Get-LabConfig
 
 # Check that the host is ready with approve host state
-    Approve-AzureStackHCILabHostState -Test Host
+    Approve-AzureStackHCILabState -Test Host
 
-# Initialize lab environment
+    # Initialize lab environment
     New-AzureStackHCILabEnvironment
 
 # Invoke VMs with appropriate configurations
     Invoke-AzureStackHCILabVMCustomization
+
+    $EndTime = Get-Date
+
+    "Start Time: $StartTime"
+    "End Time: $EndTime"
 }
 
 #TODO: Cleanup todos
-
-# Test that ISO is available
-# Test that labconfig is available and not malformed
+#TODO: Test that labconfig is available and not malformed

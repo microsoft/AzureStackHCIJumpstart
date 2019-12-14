@@ -8,9 +8,8 @@ Describe 'Host Validation' -Tags Host {
             $NodeOS.Caption | Should be ($NodeOS.Caption -like '*Windows Server 2016*' -or $NodeOS.Caption -like '*Windows Server 2019*' )
         }
 
-        #TODO: Just grab the actual module manifest from the imported module instead
+        # Not Implemented until everything gets to the PowerShell Gallery
         $RequiredModules = (Get-Module -Name AzureStackHCIJumpstart).RequiredModules
-
         $RequiredModules.GetEnumerator() | ForEach-Object {
             $thisModule = $_
 
@@ -32,6 +31,10 @@ Describe 'Host Validation' -Tags Host {
             It "${env:ComputerName} must have $($_.Name) installed" {
                 $_.InstallState | Should be 'Installed'
             }
+        }
+
+        It "${env:ComputerName} must have the specified ISO from LabConfig.ServerISOFolder" {
+            Test-Path $LabConfig.ServerISOFolder | Should be $true
         }
     }
 }
