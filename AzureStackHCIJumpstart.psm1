@@ -353,7 +353,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
         Reset-AzStackVMs -Restart -VMs $AzureStackHCIVMs -Wait
 
         Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
-        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -remote -ScriptBlock {
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
             Foreach ($vNIC in $RenameVMNic) {
                 #Note: Temp rename to avoid conflicts e.g. Ethernet should be adapter1 but is adapter2; renaming adapter2 first is necessary
