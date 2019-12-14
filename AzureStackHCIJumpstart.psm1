@@ -345,9 +345,9 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
             ForEach ($ghost in $ghosts) {
                 $RemoveKey = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($ghost.InstanceId)"
-                $VerbosePreference = 'continue'
-                Write-Host "`t`t`t Removing Ghosts"
-                Write-Host "`t`t`t`t $($ghost.InstanceId)"
+                # $VerbosePreference = 'continue' - Use for testing
+                #Write-Host "`t`t`t Removing Ghosts"
+                #Write-Host "`t`t`t`t $($ghost.InstanceId)"
                 Get-Item $RemoveKey | Select-Object -ExpandProperty Property | Foreach-Object { Remove-ItemProperty -Path $RemoveKey -Name $_ }
             }
         }
@@ -359,32 +359,19 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
         Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-            $VerbosePreference = 'continue'
-            Write-Host '------0rig----'
+            #$VerbosePreference = 'continue' - Use for testing
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
-            Write-Host "$RenameVMNic"
-            Write-Host '------Orig Complete----'
             Foreach ($vNIC in $RenameVMNic) {
-                $Guid = $(((New-Guid).Guid).Substring(0,15))
-                Write-Host "`t`t`t NIC being renamed: $($vNIC.Name)"
-                Write-Host "`t`t`t`t New NIC Name: $Guid"
-
                 #Note: Temp rename to avoid conflicts e.g. Ethernet should be adapter1 but is adapter2; renaming adapter2 first is necessary
+                $Guid = $(((New-Guid).Guid).Substring(0,15))
                 Rename-NetAdapter -Name $vNIC.Name -NewName $Guid
             }
 
-            Write-Host '----After GUID change------'
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
-            Write-Host "$RenameVMNic"
-
-            #Note: Sleep to avoid race
-            Start-Sleep -Seconds 3
-
-            Write-Host '----Final------'
             Foreach ($vmNIC in $RenameVMNic) {
-                $VerbosePreference = 'continue'
-                Write-Host "`t`t`t NIC being renamed: $($vmNIC.name)"
-                Write-Host "`t`t`t`t New NIC Name: $($vmNIC.DisplayValue)"
+                #$VerbosePreference = 'continue' - Use for testing
+                #Write-Host "`t`t`t NIC being renamed: $($vmNIC.name)"
+                #Write-Host "`t`t`t`t New NIC Name: $($vmNIC.DisplayValue)"
                 Rename-NetAdapter -Name $vmNIC.Name -NewName "$($vmNIC.DisplayValue)"
             }
         }
@@ -544,3 +531,6 @@ Function Initialize-AzureStackHCILabOrchestration {
 }
 
 #TODO: Cleanup todos
+
+# Test that ISO is available
+# Test that labconfig is available and not malformed
