@@ -1,16 +1,42 @@
 # Jumpstart your Azure Stack HCI Lab
 
+This module is intended to deploy a lab environment for testing Azure Stack HCI. It should be run from a Hyper-V host.
+
+This module can:
+
+- Check that the
+
+## Customizing the deployment
+
+By default you only need to update one value to run this
+
 ## Deployment
 
-### Deploy the entire lab with customization
+Note: The long-term goal is that these two commands can all be run independently but additional testing is needed. If you find an issue, file a bug and just keep running the lab orchestration command
+
+```New-AzureStackHCILabEnvironment```
+```Invoke-AzureStackHCILabVMCustomization```
+
+### Deploy the entire lab with VM customization
+
 ```Initialize-AzureStackHCILabOrchestration```
+
+### Just Deploy the lab infrastructure (don't customize VMs)
+
+```New-AzureStackHCILabEnvironment```
+
+### Customize the lab VMs; don't redeploy stuff
+
+```Invoke-AzureStackHCILabVMCustomization```
 
 ## Destruction
 
 **Removes all HCI VMs (Hyper-V Hosts and WAC VM)**
+
 ```Remove-AzureStackHCILabEnvironment```
 
 **Additionally removes the domain controller, virtual switch, and base disk**
+
 ```Remove-AzureStackHCILabEnvironment -FireAndBrimstone```
 
 
