@@ -8,6 +8,10 @@ Describe 'Host Validation' -Tags Host {
             $NodeOS.Caption | Should be ($NodeOS.Caption -like '*Windows Server 2016*' -or $NodeOS.Caption -like '*Windows Server 2019*' )
         }
 
+        It "${env:ComputerName} should have enough memory to cover what's specified in LabConfig" {
+            (($LabConfig.VMs.MemoryStartupBytes | Measure-Object -Sum).Sum / 1GB + 2) | Should BeLessThan ((Get-CimInstance -ClassName Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum / 1GB)
+        }
+
         # Not Implemented until everything gets to the PowerShell Gallery
         $RequiredModules = (Get-Module -Name AzureStackHCIJumpstart).RequiredModules
         $RequiredModules.GetEnumerator() | ForEach-Object {

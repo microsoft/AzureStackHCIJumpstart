@@ -2,13 +2,21 @@
 
 This module is intended to deploy a lab environment for testing Azure Stack HCI. It should be run from a Hyper-V host.
 
-This module can:
+This module:
 
-- Check that the
+- Deploys test VMs
+- Installs Active Directory and join the VMs to the domain
+- Creates virtual NICs and disks
+
+So that you can test the Azure Stack HCI deployment in various configurations:
+- Various NIC configurations
+- Various disk types (SCM, SSD, HDD)
 
 ## Customizing the deployment
 
 By default you only need to update one value to run this
+
+..\helpers\helpers.psm1 - Edit the path to the ISO file. This is the ISO used for installing all the VMs. (you can use existing VMs rather than create your own. But you still need to give a path to an ISO file)
 
 ## Deployment
 
