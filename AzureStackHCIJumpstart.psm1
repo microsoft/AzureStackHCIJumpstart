@@ -9,7 +9,7 @@ Function Approve-AzureStackHCILabState {
 
     Switch ($Test) {
         'Host' {
-            $ValidationResults = Invoke-Pester -Tag Host -Script "$here\tests\unit\AzureStackHCILabHostState.unit.tests.ps1" -PassThru
+            $ValidationResults = Invoke-Pester -Tag Host -Script "$here\tests\unit\AzureStackHCILabState.unit.tests.ps1" -PassThru
             $ValidationResults | Select-Object -Property TagFilter, Time, TotalCount, PassedCount, FailedCount, SkippedCount, PendingCount | Format-Table -AutoSize
 
             If ($ValidationResults.FailedCount -ne 0) {
@@ -18,7 +18,7 @@ Function Approve-AzureStackHCILabState {
         }
 
         'Lab' {
-            $ValidationResults = Invoke-Pester -Tag Lab -Script "$here\tests\unit\AzureStackHCILabEnvironment.unit.tests.ps1" -PassThru
+            $ValidationResults = Invoke-Pester -Tag Lab -Script "$here\tests\unit\AzureStackHCILabState.unit.tests.ps1" -PassThru
             $ValidationResults | Select-Object -Property TagFilter, Time, TotalCount, PassedCount, FailedCount, SkippedCount, PendingCount | Format-Table -AutoSize
 
             If ($ValidationResults.FailedCount -ne 0) {
@@ -91,7 +91,13 @@ Function Remove-AzureStackHCILabEnvironment {
 
 Function New-AzureStackHCILabEnvironment {
 #region In case orchestration was not run
-    if (-not ($here)) { $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path }
+    if (-not ($here)) {
+        $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+        if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+
+        $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+    }
+
     if (-not (Get-Module -Name helpers)) {
         $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
         Import-Module $helperPath -Force
@@ -197,7 +203,13 @@ Function New-AzureStackHCILabEnvironment {
 
 Function Invoke-AzureStackHCILabVMCustomization {
 #region In case orchestration was not run
-    if (-not ($here)) { $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path }
+    if (-not ($here)) {
+        $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+        if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+
+        $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+    }
+
     if (-not (Get-Module -Name helpers)) {
         $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
         Import-Module $helperPath -Force
@@ -522,6 +534,10 @@ Function Initialize-AzureStackHCILabOrchestration {
         More projects : https://aka.ms/HCI-Deployment
         Email Address : TODO
 #>
+
+    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+    if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+
     $StartTime = Get-Date
 
     Clear-Host
@@ -535,6 +551,7 @@ Function Initialize-AzureStackHCILabOrchestration {
         Get-Module -Name $_.Name | Remove-Module -Force -ErrorAction SilentlyContinue
     }
 
+    Write-Host "Importing Modules from: $here\helpers"
     Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
         $path     = $_.FullName
         $destPath = "C:\Program Files\WindowsPowerShell\Modules\$_"
