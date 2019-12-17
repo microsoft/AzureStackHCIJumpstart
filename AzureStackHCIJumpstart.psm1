@@ -95,6 +95,9 @@ Function New-AzureStackHCILabEnvironment {
         $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
         if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
 
+        $StartTime = Get-Date
+        $ranOOB = $true
+
         $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
     }
 
@@ -199,6 +202,13 @@ Function New-AzureStackHCILabEnvironment {
     }
 
     Write-Host "Completed Environment Setup"
+
+    if ($ranOOB) {
+        Write-Host "`t Since this was run without orchestration, you may still need to customize using Invoke-AzureStackHCILabVMCustomization"
+        $EndTime = Get-Date
+        "Start Time: $StartTime"
+        "End Time: $EndTime"
+    }
 }
 
 Function Invoke-AzureStackHCILabVMCustomization {
@@ -206,6 +216,9 @@ Function Invoke-AzureStackHCILabVMCustomization {
     if (-not ($here)) {
         $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
         if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+
+        $StartTime = Get-Date
+        $ranOOB = $true
 
         $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
     }
@@ -322,12 +335,12 @@ Function Invoke-AzureStackHCILabVMCustomization {
         }
     }
 
-    Write-Host "`n Beginning Adapter configuration"
+    Write-Host "`nBeginning Adapter configuration"
     #Setup guest adapters on the host
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
 
-        Write-Host "Creating adapters for $($thisVM.Name)"
+        Write-Host "`t Creating adapters for $($thisVM.Name)"
         $theseAdapters = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.Adapters
 
         #Note: There shouldn't be any NICs in the system at this point, so just add however many you in $theseAdapters
@@ -351,7 +364,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
             Set-VMNetworkAdapterVlan -VMName $thisVM.Name -VMNetworkAdapterName $_.Name -Trunk -AllowedVlanIdList 1-4094 -NativeVlanId 0
         }
 
-        Write-Host "Renaming vmNICs for propagation through to the $($thisVM.Name)"
+        Write-Host "`t Renaming vmNICs for propagation through to the $($thisVM.Name)"
 
         #Note: Naming the first 2 Mgmt for easy ID. This can be updated; just trying to keep it simple
         $AdapterCount = 1
@@ -389,8 +402,6 @@ Function Invoke-AzureStackHCILabVMCustomization {
             ForEach ($ghost in $ghosts) {
                 $RemoveKey = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($ghost.InstanceId)"
                 # $VerbosePreference = 'continue' - Use for testing
-                #Write-Host "`t`t`t Removing Ghosts"
-                #Write-Host "`t`t`t`t $($ghost.InstanceId)"
                 Get-Item $RemoveKey | Select-Object -ExpandProperty Property | Foreach-Object { Remove-ItemProperty -Path $RemoveKey -Name $_ }
             }
         }
@@ -435,6 +446,8 @@ Function Invoke-AzureStackHCILabVMCustomization {
                                 Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC'
                             }
                         }
+
+                        Set-DnsClient -InterfaceAlias $interface.Name  -RegisterThisConnectionsAddress $true
                     }
 
                     'Mgmt02' {
@@ -446,6 +459,8 @@ Function Invoke-AzureStackHCILabVMCustomization {
                             if ($friendlyPath -ne $null) {
                                 Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC #2'
                             }
+
+                            Set-DnsClient -InterfaceAlias $interface.Name  -RegisterThisConnectionsAddress $true
                         }
                     }
 
@@ -468,6 +483,8 @@ Function Invoke-AzureStackHCILabVMCustomization {
                                 $intNum = $null
                             }
                         }
+
+                        Set-DnsClient -InterfaceAlias $interface.Name  -RegisterThisConnectionsAddress $false
                     }
                 }
             }
@@ -477,7 +494,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
         $theseSSDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives.Size / 1GB
         $theseHDDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives.Size / 1GB
 
-        Write-Host "`t Setting media type for the disks"
+        Write-Host "Setting media type for the disks"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
             Get-PhysicalDisk | Where-Object Size -eq $using:theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
                 Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "PMEM$($_.DeviceID)" -MediaType SCM
@@ -491,6 +508,18 @@ Function Invoke-AzureStackHCILabVMCustomization {
                 Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "HDD$($_.DeviceID)" -MediaType HDD
             }
         }
+
+        Write-Host "Enabling SMB-in and Echo-in firewall rules"
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            Get-NetFirewallRule -DisplayName "*File and Printer Sharing (Echo Request*In)" | Enable-NetFirewallRule
+            Get-NetFirewallRule -DisplayName "File and Printer Sharing (SMB-In)" | Enable-NetFirewallRule
+        }
+    }
+
+    if ($ranOOB) {
+        $EndTime = Get-Date
+        "Start Time: $StartTime"
+        "End Time: $EndTime"
     }
 }
 
