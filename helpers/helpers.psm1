@@ -147,7 +147,7 @@ Function Reset-AzStackVMs {
     }
 
     If ($Shutdown) {
-        $VMs | ForEach-Object { Stop-VM -VMName $_.Name }
+        $VMs | ForEach-Object { Stop-VM -VMName $_.Name -WarningAction SilentlyContinue  }
         If ($Wait) { Wait-ForHeartbeatState -State Off -VMs $VMs }
     }
 
