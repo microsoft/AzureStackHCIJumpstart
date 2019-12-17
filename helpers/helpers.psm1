@@ -16,7 +16,7 @@ Function Get-LabConfig {
         DomainName        = 'gotham.city'
 
         # This is the filepath to the ISO that will be used to deploy the lab VMs
-        ServerISOFolder   = 'C:\Datastore\19537.1000.191212-1425.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
+        ServerISOFolder   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
         # This is the name of the switch to attach VMs to. This lab has DHCP so either make a private/internal vSwitch or i'm going to takeover your network
         # If the specified switch doesn't exist a private switch will be created AzureStackHCILab-Guid
@@ -25,7 +25,7 @@ Function Get-LabConfig {
         VMs = @()
     }
 
-    1..2 | ForEach-Object {
+    1..4 | ForEach-Object {
         $LABConfig.VMs += @{
             VMName        = "0$_"
 

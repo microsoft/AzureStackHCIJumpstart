@@ -126,16 +126,35 @@ Function New-AzureStackHCILabEnvironment {
     Write-Host "Starting All VMs" # Don't wait
     Reset-AzStackVMs -Start -VMs $AllVMs
 
-    # Begin Reparenting Disks
-    $AllVMs | ForEach-Object {
-        $VHDXToConvert = $_ | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
-        $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
+#region Testing
 
-        if ($BaseDiskPath -eq $VHDPath) {
-            Write-Host "Beginning VHDX Reparenting for $($_.Name)"
-            Move-ToNewParentVHDX -VM $_ -VHDXToConvert $VHDXToConvert
+#Note: This needs testing; merge requires the disks to be offline but at this point they will be on
+#      Alternatively, how will i get the ACL
+    $AllVMs | ForEach-Object {
+        $thisVM = $_
+
+        Start-RSJob -Name "$($thisVM.Name)-Reparent" -ScriptBlock {
+            $VHDXToConvert = $using:thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
+            $ParentPath   = Split-Path -Path $VHDXToConvert.Path -Parent
+            $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
+            $BaseDiskACL = Get-ACL $BaseDiskPath
+
+            if ($BaseDiskPath -eq $using:VHDPath) {
+                Write-Host "Beginning VHDX Reparenting for $($_.Name)"
+
+                $BaseLeaf = Split-Path $BaseDiskPath -Leaf
+                $NewBasePath = Join-Path -Path $ParentPath -ChildPath $BaseLeaf
+                Copy-Item -Path $BaseDiskPath -Destination $NewBasePath -InformationAction SilentlyContinue
+
+                Write-Host "`t Reparenting $($VM.Name) OSD to $NewBasePath"
+                $VHDXToConvert | Set-VHD -ParentPath $NewBasePath -IgnoreIdMismatch
+            }
         }
     }
+
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
+#endregion
 
     # Rename Guests
     Wait-ForHeartbeatState -State On -VMs $AllVMs

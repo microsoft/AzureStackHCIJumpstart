@@ -26,22 +26,11 @@ Measure-Command {
     Get-RSJob | Remove-RSJob
 }
 
-'xActiveDirectory', 'xDNSServer', 'NetworkingDSC', 'xDHCPServer', 'xPSDesiredStateConfiguration' | foreach-Object {
-    $thisModule = $_
-    start-rsjob -Name "$thisModule-Modules" -ScriptBlock {
-        Copy-Item -Path "C:\Program Files\WindowsPowerShell\Modules\$($using:thisModule)" -Destination "C:\Datastore\VMs\Tester\" -Recurse -Force
-    }
-}
 
 Get-RSJob | Wait-RSJob -ShowProgress
 
-$something = Get-RSJob | ? State -ne Completed
-
 Get-RSJob | Remove-RSJob
 
-Get-RSJob -Name "AzStackHCI02-Disks"  | Wait-RSJob
-Get-RSJob -Name "AzStackHCI03-Disks"  | Wait-RSJob
-Get-RSJob -Name "AzStackHCI04-Disks"  | Wait-RSJob
 
 
 $AllVMs | Foreach-Object {
@@ -74,3 +63,29 @@ $AllVMs | ForEach-Object {
         }
     }
 }
+
+
+$AllVMs | ForEach-Object {
+    $thisVM = $_
+
+    Start-RSJob -Name "$($thisVM.Name)-Reparent" -ScriptBlock {
+        $VHDXToConvert = $using:thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
+        $ParentPath   = Split-Path -Path $VHDXToConvert.Path -Parent
+        $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
+
+        if ($BaseDiskPath -eq $VHDPath) {
+            Write-Host "Beginning VHDX Reparenting for $($_.Name)"
+
+            $BaseLeaf = Split-Path $BaseDiskPath -Leaf
+            $NewBasePath = Join-Path -Path $ParentPath -ChildPath $BaseLeaf
+            Copy-Item -Path $BaseDiskPath -Destination $NewBasePath -InformationAction SilentlyContinue
+
+            $Global:BaseDiskACL = Get-ACL $BaseDiskPath
+
+            Write-Host "`t Reparenting $($VM.Name) OSD to $NewBasePath"
+            $VHDXToConvert | Set-VHD -ParentPath $NewBasePath -IgnoreIdMismatch
+        }
+    }
+}
+
+Get-RSJob | Wait-RSJob
