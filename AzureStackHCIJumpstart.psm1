@@ -29,13 +29,11 @@ Function Approve-AzureStackHCILabState {
 }
 
 Function Remove-AzureStackHCILabEnvironment {
-    # This function can be run independently of the others.
     param (
         # Also destroys basedisk, domain controller, and vSwitch
         [switch] $FireAndBrimstone
     )
 
-    # Clean
     Clear-Host
 
     If ($FireAndBrimstone) { Write-Host 'Fire and Brimstone was specified -- This environment will self-destruct in T-5 seconds' ; Start-Sleep -Seconds 5 }
@@ -575,19 +573,30 @@ Function Initialize-AzureStackHCILabOrchestration {
     Write-Host "Azure Stack HCI Jumpstart module is running from: $here"
 
     #Note: These are required until this entire package is published in the PoSH gallery. Once completed, requiredmodules will be used in the manifest.
-
     Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
         Get-Module -Name $_.Name | Remove-Module -Force -ErrorAction SilentlyContinue
     }
 
     Write-Host "Importing Modules from: $here\helpers"
-    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
-        $path     = $_.FullName
+#region Temporary unti; added to posh gallery
+    Copy-Item -Path "$here\helpers\ModulesTillPublishedonGallery\PoshRSJob" -Recurse -Destination "C:\Program Files\WindowsPowerShell\Modules\PoshRSJob" -Container -ErrorAction SilentlyContinue
+    Import-Module -Name PoshRSJob -Force -Global -ErrorAction SilentlyContinue
+
+    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" -Exclude PoshRSJob | foreach-Object {
+        $thisModule = $_
+        $path = $_.FullName
         $destPath = "C:\Program Files\WindowsPowerShell\Modules\$_"
 
-        Copy-Item -Path $path -Recurse -Destination $destPath -Container -ErrorAction SilentlyContinue
+        start-rsjob -Name "$thisModule-Modules" -ScriptBlock {
+            Copy-Item -Path $using:path -Recurse -Destination $using:destPath -Container -Force -ErrorAction SilentlyContinue
+        }
+
         Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
     }
+
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
+#endregion
 
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
     Import-Module $helperPath -Force

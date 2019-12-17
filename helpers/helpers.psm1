@@ -25,13 +25,13 @@ Function Get-LabConfig {
         VMs = @()
     }
 
-    1..4 | ForEach-Object {
+    1..2 | ForEach-Object {
         $LABConfig.VMs += @{
             VMName        = "0$_"
 
             # This should always be AzureStackHCI
             Role = 'AzureStackHCI'
-            MemoryStartupBytes = 8GB
+            MemoryStartupBytes = 2GB
 
             SCMDrives = @{ Count = 2 ; Size  = 32GB  }
             SSDDrives = @{ Count = 4 ; Size  = 256GB }
@@ -49,7 +49,7 @@ Function Get-LabConfig {
             )
         }
     }
-
+<#
     #TODO: Build a W10 WAC System
     $LABConfig.VMs += @{
         VMName        = 'WAC01'
@@ -57,14 +57,14 @@ Function Get-LabConfig {
         # This should always be WAC
         Role          = 'WAC'
         MemoryStartupBytes = 8GB
-    }
+    }#>
 
     $LABConfig.VMs += @{
         VMName        = 'DC01'
 
         # This should always be Domain Controller
         Role          = 'Domain Controller'
-        MemoryStartupBytes = 8GB
+        MemoryStartupBytes = 1GB
     }
 
     # No touchie! Required but no mods needed - Prep local and domain creds
@@ -257,7 +257,7 @@ Function Initialize-BaseDisk {
     Write-Host "`t Applying Unattend and copying DSC Modules"
     $unattendfile = "$VMPath\buildData\Unattend.xml"
 
-    if ( Test-Path $VHDPath ) {
+    If ( Test-Path $VHDPath ) {
         Dismount-DiskImage -ImagePath $VHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
         $MountedDisk = Mount-DiskImage    -ImagePath $VHDPath -StorageType VHDX -ErrorAction SilentlyContinue
 
@@ -273,15 +273,22 @@ Function Initialize-BaseDisk {
 
                 New-Item -Path "$MountPath\Windows\Panther" -ItemType Directory -Force -InformationAction SilentlyContinue
                 Use-WindowsUnattend -Path $MountPath -UnattendPath $unattendfile -InformationAction SilentlyContinue
-                'xActiveDirectory', 'xDNSServer', 'NetworkingDSC', 'xDHCPServer', 'xPSDesiredStateConfiguration' | Foreach-Object {
-                    Copy-Item -Path "C:\Program Files\WindowsPowerShell\Modules\$_" -Destination "$MountPath\Program Files\WindowsPowerShell\Modules\" -Recurse -Force
+
+                'xActiveDirectory', 'xDNSServer', 'NetworkingDSC', 'xDHCPServer', 'xPSDesiredStateConfiguration' | foreach-Object {
+                    $thisModule = $_
+
+                    start-rsjob -Name "$thisModule-Modules" -ScriptBlock {
+                        Copy-Item -Path "C:\Program Files\WindowsPowerShell\Modules\$($using:thisModule)" -Destination "$MountPath\Program Files\WindowsPowerShell\Modules\" -Recurse -Force
+                    }
                 }
+
+                Get-RSJob | Wait-RSJob
+                Get-RSJob | Remove-RSJob
 
                 Copy-Item -Path $unattendfile -Destination "$MountPath\Windows\Panther\unattend.xml" -Force
             }
         }
-        Else { Write-Host "`t $VHDPath could not be mounted but was found" }
-
+        Else { Write-Host "`t $VHDPath could not be mounted but was found (likely in use)" }
     }
     Else { Write-Host "$VHDPath was not found - Can't hydrate the basedisk" }
 
@@ -468,9 +475,7 @@ Function Add-LabVirtualMachines {
     $LabConfig.VMs | ForEach-Object {
         $VM = Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
 
-        If ($VM) {
-            Write-Host "`t VM named $($LabConfig.Prefix)$($_.VMName) already exists"
-        }
+        If ($VM) { Write-Host "`t VM named $($LabConfig.Prefix)$($_.VMName) already exists" }
         else {
             Write-Host "`t Creating VM: $($LabConfig.Prefix)$($_.VMName)"
             $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes $_.MemoryStartupBytes -Path $vmpath -SwitchName "$Switchname*" -Generation 2
