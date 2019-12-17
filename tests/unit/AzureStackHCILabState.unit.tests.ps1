@@ -5,7 +5,7 @@ Describe 'Host Validation' -Tags Host {
         ### Verify the Host is sufficient version
         #TODO: Can this run on windows 10? - Not without WindowsFeature checking
         It "${env:ComputerName} must be Windows Server 2016, or Server 2019" {
-            $NodeOS.Caption | Should be ($NodeOS.Caption -like '*Windows Server 2016*' -or $NodeOS.Caption -like '*Windows Server 2019*')
+            $NodeOS.Caption | Should be ($NodeOS.Caption -like '*Windows Server 2016*' -or $NodeOS.Caption -like '*Windows Server 2019*' -or $NodeOS.Caption -like '*Windows 10*')
         }
 
         It "${env:ComputerName} should have enough memory to cover what's specified in LabConfig" {
@@ -14,26 +14,42 @@ Describe 'Host Validation' -Tags Host {
 
         # Not Implemented until everything gets to the PowerShell Gallery
         $RequiredModules = (Get-Module -Name AzureStackHCIJumpstart).RequiredModules
-        $RequiredModules.GetEnumerator() | ForEach-Object {
-            $thisModule = $_
 
-            Remove-Variable module -ErrorAction SilentlyContinue
-            $module = Get-Module $thisModule.Name -ListAvailable -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
+        #TODO: Remove if ($requiredModules) once published on the PoSH Gallery
+        if ($RequiredModules) {
+            $RequiredModules.GetEnumerator() | ForEach-Object {
+                $thisModule = $_
 
-            It "[TestHost: ${env:ComputerName}] Must have the module [$($thisModule.Name)] available" {
-                $module.Name | Should Not BeNullOrEmpty
-            }
+                Remove-Variable module -ErrorAction SilentlyContinue
+                $module = Get-Module $thisModule.Name -ListAvailable -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
 
-            It "[TestHost: ${env:ComputerName}] Must be at least version [$($thisModule.Version)]" {
-                $module.version -ge $_.ModuleVersion | Should be $true
+                It "[TestHost: ${env:ComputerName}] Must have the module [$($thisModule.Name)] available" {
+                    $module.Name | Should Not BeNullOrEmpty
+                }
+
+                It "[TestHost: ${env:ComputerName}] Must be at least version [$($thisModule.Version)]" {
+                    $module.version -ge $_.ModuleVersion | Should be $true
+                }
             }
         }
 
-        $HyperVInstallationState = (Get-WindowsFeature | Where-Object Name -like *Hyper-V* -ErrorAction SilentlyContinue)
+        Switch -Wildcard ($NodeOS.Caption) {
+            "*Windows 10*" {
+                $HyperVInstallationState = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V
 
-        $HyperVInstallationState | ForEach-Object {
-            It "${env:ComputerName} must have $($_.Name) installed" {
-                $_.InstallState | Should be 'Installed'
+                It "${env:ComputerName} must have $($HyperVInstallationState.DisplayName) installed" {
+                    $HyperVInstallationState.State | Should be 'Enabled'
+                }
+            }
+
+            Default {
+                $HyperVInstallationState = (Get-WindowsFeature | Where-Object Name -like *Hyper-V* -ErrorAction SilentlyContinue)
+
+                $HyperVInstallationState | ForEach-Object {
+                    It "${env:ComputerName} must have $($_.Name) installed" {
+                        $_.InstallState | Should be 'Installed'
+                    }
+                }
             }
         }
 

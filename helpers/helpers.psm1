@@ -1,5 +1,9 @@
 # These functions are not exported
 Function Get-LabConfig {
+    # This is the path where VMs will be created for the lab e.g. c:\DataStore\VMs (then \VM01 folder will be added below it)
+    $global:VMPath = 'C:\DataStore\VMs'
+    New-Item -Path $VMPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+
     $LabConfig = @{
         # Will be appended to every VM
         Prefix     = 'AzStackHCI'
@@ -12,7 +16,7 @@ Function Get-LabConfig {
         DomainName        = 'gotham.city'
 
         # This is the filepath to the ISO that will be used to deploy the lab VMs
-        ServerISOFolder   = 'C:\DataStore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
+        ServerISOFolder   = 'C:\Datastore\19537.1000.191212-1425.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
         # This is the name of the switch to attach VMs to. This lab has DHCP so either make a private/internal vSwitch or i'm going to takeover your network
         # If the specified switch doesn't exist a private switch will be created AzureStackHCILab-Guid
@@ -26,13 +30,8 @@ Function Get-LabConfig {
             VMName        = "0$_"
 
             # This should always be AzureStackHCI
-            Role          = 'AzureStackHCI'
-            Configuration = 'Simple'
-
-            # This should always be BaseDisk and the image build number
-            ParentVHD          = 'BaseDisk_19507.vhdx'
-            MemoryStartupBytes = 8192MB
-            EnableWinRM        = $True
+            Role = 'AzureStackHCI'
+            MemoryStartupBytes = 8GB
 
             SCMDrives = @{ Count = 2 ; Size  = 32GB  }
             SSDDrives = @{ Count = 4 ; Size  = 256GB }
@@ -51,15 +50,13 @@ Function Get-LabConfig {
         }
     }
 
+    #TODO: Build a W10 WAC System
     $LABConfig.VMs += @{
         VMName        = 'WAC01'
 
         # This should always be WAC
         Role          = 'WAC'
-        Configuration = 'Simple'
-        ParentVHD          = 'BaseDisk_19507.vhdx'
         MemoryStartupBytes = 8GB
-        EnableWinRM        = $True
     }
 
     $LABConfig.VMs += @{
@@ -67,20 +64,11 @@ Function Get-LabConfig {
 
         # This should always be Domain Controller
         Role          = 'Domain Controller'
-        Configuration = 'Simple'
-        ParentVHD          = 'BaseDisk_19507.vhdx'
         MemoryStartupBytes = 8GB
-        EnableWinRM        = $True
     }
 
+    # No touchie! Required but no mods needed - Prep local and domain creds
     $LabConfig.DomainNetbiosName = ($LabConfig.DomainName.Split('.')[0])
-    $LabConfig.PullServerDC  = $true
-
-    $global:VMPath = 'C:\DataStore\VMs'
-    New-Item -Path $VMPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-    # This is the path where VMs will be created for the lab e.g. c:\DataStore\VMs (then \VM01 folder will be added below it)
-
-    # Prep local and domain creds
     $global:pass   = ConvertTo-SecureString $($LabConfig.AdminPassword) -AsPlainText -Force
     $global:VMCred = New-Object System.Management.Automation.PSCredential ("$($LabConfig.DomainName)\$($LabConfig.DomainAdminName)", $pass)
     $global:localCred = New-Object System.Management.Automation.PSCredential ('.\Administrator', $pass)
@@ -317,7 +305,7 @@ Function Initialize-BaseDisk {
             [pscredential] $domainCred
         )
 
-        Import-DscResource -ModuleName xActiveDirectory, xDNSServer, NetworkingDSC, xDHCPServer, xPSDesiredStateConfiguration, PSDesiredStateConfiguration
+        Import-DscResource -ModuleName xActiveDirectory, xDNSServer, NetworkingDSC, xDHCPServer, PSDesiredStateConfiguration
 
         $safemodeAdministratorCred = $domainCred
         $NewADUserCred = $domainCred
@@ -328,7 +316,7 @@ Function Initialize-BaseDisk {
                 Name = "AD-Domain-Services"
             }
 
-            'GPMC', 'RSAT-AD-PowerShell', 'RSAT-AD-AdminCenter', 'RSAT-ADDS-Tools', 'RSAT-DNS-Server', 'DSC-Service', 'DHCP', 'RSAT-DHCP' | Foreach-Object {
+            'GPMC', 'RSAT-AD-PowerShell', 'RSAT-AD-AdminCenter', 'RSAT-ADDS-Tools', 'RSAT-DNS-Server', 'DHCP', 'RSAT-DHCP' | Foreach-Object {
                 $thisFeatureToLower = $_.Replace('-', '_')
 
                 WindowsFeature $thisFeatureToLower {
@@ -417,28 +405,6 @@ Function Initialize-BaseDisk {
                 Ensure = "Present"
                 DependsOn = "[xDhcpServerOption]MgmtScopeRouterOption"
             }
-
-            If ($LabConfig.PullServerDC) {
-                xDscWebService PSDSCPullServer {
-                    UseSecurityBestPractices = $false
-                    Ensure                  = "Present"
-                    EndpointName            = "PSDSCPullServer"
-                    Port                    = 8080
-                    PhysicalPath            = "$env:SystemDrive\inetpub\wwwroot\PSDSCPullServer"
-                    CertificateThumbPrint   = "AllowUnencryptedTraffic"
-                    ModulePath              = "$env:PROGRAMFILES\WindowsPowerShell\DscService\Modules"
-                    ConfigurationPath       = "$env:PROGRAMFILES\WindowsPowerShell\DscService\Configuration"
-                    State                   = "Started"
-                    DependsOn               = '[WindowsFeature]DSC_Service'
-                }
-
-                File RegistrationKeyFile {
-                    Ensure = 'Present'
-                    Type   = 'File'
-                    DestinationPath = "$env:ProgramFiles\WindowsPowerShell\DscService\RegistrationKeys.txt"
-                    Contents        = $Node.RegistrationKey
-                }
-            }
         }
     }
 
@@ -481,6 +447,9 @@ Function Initialize-BaseDisk {
 
     #TODO: Got to here last night
     DCHydration -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -domainCred $localCred -InformationAction SilentlyContinue | Out-Null
+
+    If (-not (test-path "$VMPath\buildData\config\localhost.meta.mof")) { Write-Error 'Domain Controller LCM MOF creation failed' }
+    If (-not (test-path "$VMPath\buildData\config\localhost.mof"))      { Write-Error 'Domain Controller Config MOF creation failed' }
 }
 
 #Create Domain Controller VM and vSwitch for lab
@@ -499,10 +468,12 @@ Function Add-LabVirtualMachines {
     $LabConfig.VMs | ForEach-Object {
         $VM = Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
 
-        If ($VM) { Write-Host "`t VM named $($LabConfig.Prefix)$($_.VMName) already exists" }
+        If ($VM) {
+            Write-Host "`t VM named $($LabConfig.Prefix)$($_.VMName) already exists"
+        }
         else {
             Write-Host "`t Creating VM: $($LabConfig.Prefix)$($_.VMName)"
-            $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes 8GB -Path $vmpath -SwitchName "$Switchname*" -Generation 2
+            $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes $_.MemoryStartupBytes -Path $vmpath -SwitchName "$Switchname*" -Generation 2
             New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -Differencing -ErrorAction SilentlyContinue | Out-Null
             $BootDevice = Add-VMHardDiskDrive -VMName "$($LabConfig.Prefix)$($_.VMName)" -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Passthru -ErrorAction SilentlyContinue
             Set-VMFirmware -VMName "$($LabConfig.Prefix)$($_.VMName)" -BootOrder $BootDevice

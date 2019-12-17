@@ -557,7 +557,6 @@ Function Initialize-AzureStackHCILabOrchestration {
         $destPath = "C:\Program Files\WindowsPowerShell\Modules\$_"
 
         Copy-Item -Path $path -Recurse -Destination $destPath -Container -ErrorAction SilentlyContinue
-
         Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
     }
 
