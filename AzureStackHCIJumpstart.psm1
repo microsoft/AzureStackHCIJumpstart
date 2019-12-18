@@ -134,19 +134,20 @@ Function New-AzureStackHCILabEnvironment {
         $thisVM = $_
 
         Start-RSJob -Name "$($thisVM.Name)-Reparent" -ScriptBlock {
-            $VHDXToConvert = $using:thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
+            $thisJobVM = $using:thisVM
+
+            $VHDXToConvert = $thisJobVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
             $ParentPath   = Split-Path -Path $VHDXToConvert.Path -Parent
             $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
-            $BaseDiskACL = Get-ACL $BaseDiskPath
 
             if ($BaseDiskPath -eq $using:VHDPath) {
-                Write-Host "Beginning VHDX Reparenting for $($_.Name)"
+                [Console]::WriteLine("Copying VHDX base disk for reparenting on $($thisJobVM.Name)")
 
                 $BaseLeaf = Split-Path $BaseDiskPath -Leaf
                 $NewBasePath = Join-Path -Path $ParentPath -ChildPath $BaseLeaf
                 Copy-Item -Path $BaseDiskPath -Destination $NewBasePath -InformationAction SilentlyContinue
 
-                Write-Host "`t Reparenting $($VM.Name) OSD to $NewBasePath"
+                [Console]::WriteLine("`t Reparenting $($thisJobVM.Name) OSD to $NewBasePath")
                 $VHDXToConvert | Set-VHD -ParentPath $NewBasePath -IgnoreIdMismatch
             }
         }
@@ -193,6 +194,7 @@ Function New-AzureStackHCILabEnvironment {
         Write-Host "Joining $thisSystem to domain"
 
 #TODO: Only do this if not already joined
+#TODO: Can this be runspaced?
         $thisDomain = $LabConfig.DomainNetbiosName
         Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
             Add-Computer -ComputerName $using:thisSystem -LocalCredential $Using:localCred -DomainName $using:thisDomain -Credential $Using:VMCred -Force -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
@@ -206,17 +208,32 @@ Function New-AzureStackHCILabEnvironment {
 
     # Begin Merge
     $AllVMs | ForEach-Object {
-        Remove-Variable VHDXToConvert, BaseDiskPath -ErrorAction SilentlyContinue
-        $VHDXToConvert = $_ | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
-        $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
+        $thisVM = $_
+        $BaseDiskACL = Get-ACL $VHDPath
 
-        # Note: Get-VHD ParentPath always reports with 1 character if it's actually Null which is why we're doing this next monstrosity to figure out if it actually has a base disk or not
-        if ($BaseDiskPath.Length -gt 0) {
-            Write-Host "`t Beginning VHDX Merge for $($_.Name)"
-            Convert-FromDiffDisk -VM $_ -VHDXToConvert $VHDXToConvert
+        Start-RSJob -Name "$($thisVM.Name)-MergeAndACL" -ScriptBlock {
+            $thisJobVM = $using:thisVM
+
+            $VHDXToConvert = $thisJobVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
+            $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
+
+            # Note: Get-VHD ParentPath always reports with 1 character if it's actually Null which is why we're doing this next monstrosity to figure out if it actually has a base disk or not
+            if ($BaseDiskPath.Length -gt 0) {
+                [Console]::WriteLine("`t Beginning VHDX Merge for $($thisJobVM.Name)")
+
+                Set-ACL  -Path $BaseDiskPath -AclObject $using:BaseDiskACL
+                Set-ItemProperty -Path $BaseDiskPath -Name IsReadOnly -Value $false
+
+                Merge-VHD -Path $VHDXToConvert.Path -DestinationPath $BaseDiskPath
+                Remove-VMHardDiskDrive -VMName $thisJobVM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI
+                Add-VMHardDiskDrive -VM $thisJobVM -Path $BaseDiskPath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
+            }
+            Else { [Console]::WriteLine("`t $($thisJobVM.Name) VHDX has already been merged - backslash Ignore") }
         }
-        Else { Write-Host "`t $($_.Name) VHDX has already been merged - backslash Ignore"}
     }
+
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 
     Write-Host "Completed Environment Setup"
 
