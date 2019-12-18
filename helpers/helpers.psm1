@@ -31,7 +31,7 @@ Function Get-LabConfig {
 
             # This should always be AzureStackHCI
             Role = 'AzureStackHCI'
-            MemoryStartupBytes = 2GB
+            MemoryStartupBytes = 8GB
 
             SCMDrives = @{ Count = 2 ; Size  = 32GB  }
             SSDDrives = @{ Count = 4 ; Size  = 256GB }
@@ -64,7 +64,7 @@ Function Get-LabConfig {
 
         # This should always be Domain Controller
         Role          = 'Domain Controller'
-        MemoryStartupBytes = 1GB
+        MemoryStartupBytes = 8GB
     }
 
     # No touchie! Required but no mods needed - Prep local and domain creds
@@ -486,7 +486,7 @@ Function Add-LabVirtualMachines {
         }
 
         Set-VMProcessor -VMName "$($LabConfig.Prefix)$($_.VMName)" -Count 4
-        Set-VMMemory    -VMName "$($LabConfig.Prefix)$($_.VMName)" -DynamicMemoryEnabled $true -MinimumBytes 2GB
+        Set-VMMemory    -VMName "$($LabConfig.Prefix)$($_.VMName)" -DynamicMemoryEnabled $true -MinimumBytes $_.MemoryStartupBytes
         Set-VMFirmware  -VMName "$($LabConfig.Prefix)$($_.VMName)" -EnableSecureBoot Off
         Set-VM          -VMName "$($LabConfig.Prefix)$($_.VMName)" -AutomaticCheckpointsEnabled $false
         Enable-VMIntegrationService -VMName "$($LabConfig.Prefix)$($_.VMName)" -Name 'Guest Service Interface'

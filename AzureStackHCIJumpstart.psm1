@@ -153,7 +153,7 @@ Function New-AzureStackHCILabEnvironment {
         }
     }
 
-    Get-RSJob | Wait-RSJob
+    Get-RSJob | Wait-RSJob | Out-Null
     Get-RSJob | Remove-RSJob
 #endregion
 
@@ -170,6 +170,9 @@ Function New-AzureStackHCILabEnvironment {
 
             Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
                 Rename-Computer -NewName $using:thisSystem -Force -WarningAction SilentlyContinue
+
+                #Turn off EMS to prevent startup delays since we're up/downing the system a bunch of times...
+                bcdedit.exe /ems off
             }
 
             Reset-AzStackVMs -Restart -VMs $AllVMs.Where{$_.Name -eq $thisSystem}
@@ -232,8 +235,8 @@ Function New-AzureStackHCILabEnvironment {
         }
     }
 
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
+    Get-RSJob | Wait-RSJob | Out-Null
+    Get-RSJob | Remove-RSJob | Out-Null
 
     Write-Host "Completed Environment Setup"
 
@@ -306,116 +309,125 @@ Function Invoke-AzureStackHCILabVMCustomization {
         }
     }
 
-    # Create and attach new drives
+    # Create and attach new drives; then adapters
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
-        $thisVMPath = Join-path $thisVM.Path 'Virtual Hard Disks\DataDisks'
-        Remove-Item -Path $thisVMPath -Recurse -Force -ErrorAction SilentlyContinue
+        Start-RSJob -Name "$($thisVM.Name)-CreateAndAttachDisks" -ScriptBlock {
+            $thisJobVM = $using:thisVM
 
-        $SCMPath = New-Item -Path (Join-Path $thisVMPath 'SCM') -ItemType Directory -Force
-        $SSDPath = New-Item -Path (Join-Path $thisVMPath 'SSD') -ItemType Directory -Force
-        $HDDPath = New-Item -Path (Join-Path $thisVMPath 'HDD') -ItemType Directory -Force
+            #Note: After Lab Environment is deployed, there should be 1 SCSI controller for the OSD.
+            #      This step will add 3 more. If this gets messed up re-run lab environment setup.
+            [Console]::WriteLine("Creating SCSI Controllers for $($thisJobVM.Name)")
+            1..3 | Foreach-Object { Add-VMScsiController -VMName $thisJobVM.Name -ErrorAction SilentlyContinue }
 
-        $theseSCMDrives = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SCMDrives
-        $theseSSDDrives = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives
-        $theseHDDDrives = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives
+            $thisVMPath = Join-path $thisJobVM.Path 'Virtual Hard Disks\DataDisks'
+            Remove-Item -Path $thisVMPath -Recurse -Force -ErrorAction SilentlyContinue
 
-        Write-Host "`n `nCreating drives for $($thisVM.Name)"
+            $SCMPath = New-Item -Path (Join-Path $thisVMPath 'SCM') -ItemType Directory -Force
+            $SSDPath = New-Item -Path (Join-Path $thisVMPath 'SSD') -ItemType Directory -Force
+            $HDDPath = New-Item -Path (Join-Path $thisVMPath 'HDD') -ItemType Directory -Force
 
-        # After Lab Environment is deployed, there should be 1 SCSI controller for the OSD. This step will add 3 more. If this gets messed up re-run lab environment setup.
-        Write-Host "Creating SCSI Controllers for $($thisVM.Name)"
-        1..3 | Foreach-Object { Add-VMScsiController -VMName $thisVM.Name -ErrorAction SilentlyContinue }
+            $thisJobLabConfig = $using:LabConfig
+            $theseSCMDrives   = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.SCMDrives
+            $theseSSDDrives   = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.SSDDrives
+            $theseHDDDrives   = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.HDDDrives
 
-        Write-Host "Creating SCM Drives for $($thisVM.Name)"
-        $theseSCMDrives | ForEach-Object {
-            $thisDrive = $_
+            [Console]::WriteLine("`tCreating drives for $($thisJobVM.Name)")
+            [Console]::WriteLine("`t `tCreating SCM Drives for $($thisJobVM.Name)")
+            $theseSCMDrives | ForEach-Object {
+                $thisDrive = $_
 
-            0..($theseSCMDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SCMPath\$($thisVM.Name)-SCM-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
+                0..($theseSCMDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SCMPath\$($thisJobVM.Name)-SCM-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
 
-            0..($theseSCMDrives.Count - 1) | ForEach-Object {
-                #Note: Keep this separate to avoid disk creation race
+                0..($theseSCMDrives.Count - 1) | ForEach-Object {
+                    #Note: Keep this separate to avoid disk creation race
 
-                Write-Host "`t Attaching SCM Drive from: $($SCMPath)\$($thisVM.Name)-SCM-$_.VHDX"
-                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SCMPath\$($thisVM.Name)-SCM-$_.VHDX" -ControllerType SCSI -ControllerNumber 1 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
+                    Write-Host "`t Attaching SCM Drive from: $($SCMPath)\$($thisJobVM.Name)-SCM-$_.VHDX"
+                    Add-VMHardDiskDrive -VMName $thisJobVM.Name -Path "$SCMPath\$($thisJobVM.Name)-SCM-$_.VHDX" -ControllerType SCSI -ControllerNumber 1 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
+                }
             }
-        }
 
-        Write-Host "`n Creating SSD Drives for $($thisVM.Name)"
-        $theseSSDDrives | ForEach-Object {
-            $thisDrive = $_
+            [Console]::WriteLine("`t `tCreating SSD Drives for $($thisJobVM.Name)")
+            $theseSSDDrives | ForEach-Object {
+                $thisDrive = $_
 
-            0..($theseSSDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SSDPath\$($thisVM.Name)-SSD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
+                0..($theseSSDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SSDPath\$($thisJobVM.Name)-SSD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
 
-            0..($theseSSDDrives.Count - 1) | ForEach-Object {
-                #Note: Keep this separate to avoid disk creation race
+                0..($theseSSDDrives.Count - 1) | ForEach-Object {
+                    #Note: Keep this separate to avoid disk creation race
 
-                Write-Host "`t Attaching SSD Drive from: $($SSDPath)\$($thisVM.Name)-SSD-$_.VHDX"
-                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$SSDPath\$($thisVM.Name)-SSD-$_.VHDX" -ControllerType SCSI -ControllerNumber 2 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
+                    Write-Host "`t Attaching SSD Drive from: $($SSDPath)\$($thisJobVM.Name)-SSD-$_.VHDX"
+                    Add-VMHardDiskDrive -VMName $thisJobVM.Name -Path "$SSDPath\$($thisJobVM.Name)-SSD-$_.VHDX" -ControllerType SCSI -ControllerNumber 2 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
+                }
             }
-        }
 
-        Write-Host "`n Creating HHD Drives for $($thisVM.Name)"
-        $theseHDDDrives | ForEach-Object {
-            $thisDrive = $_
+            [Console]::WriteLine("`t `tCreating HDD Drives for $($thisJobVM.Name)")
+            $theseHDDDrives | ForEach-Object {
+                $thisDrive = $_
 
-            0..($theseHDDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$HDDPath\$($thisVM.Name)-HDD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
+                0..($theseHDDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$HDDPath\$($thisJobVM.Name)-HDD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
 
-            0..($theseHDDDrives.Count - 1) | ForEach-Object {
-                #Note: Keep this separate to avoid disk creation race
+                0..($theseHDDDrives.Count - 1) | ForEach-Object {
+                    #Note: Keep this separate to avoid disk creation race
 
-                Write-Host "`t Attaching HDD Drive from: $($HDDPath)\$($thisVM.Name)-HDD-$_.VHDX"
-                Add-VMHardDiskDrive -VMName $thisVM.Name -Path "$HDDPath\$($thisVM.Name)-HDD-$_.VHDX" -ControllerType SCSI -ControllerNumber 3 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
+                    Write-Host "`t Attaching HDD Drive from: $($HDDPath)\$($thisJobVM.Name)-HDD-$_.VHDX"
+                    Add-VMHardDiskDrive -VMName $thisJobVM.Name -Path "$HDDPath\$($thisJobVM.Name)-HDD-$_.VHDX" -ControllerType SCSI -ControllerNumber 3 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
+                }
+            }
+
+            [Console]::WriteLine("`nBeginning Adapter configuration")
+            Write-Host "`t Creating adapters for $($thisJobVM.Name)"
+            $theseAdapters = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.Adapters
+
+            #Note: There shouldn't be any NICs in the system at this point, so just add however many you in $theseAdapters
+            1..$theseAdapters.Count | Foreach-Object {
+                Add-VMNetworkAdapter -VMName $thisJobVM.Name -SwitchName "$($thisJobLabConfig.SwitchName)*"
             }
         }
     }
 
-    Write-Host "`nBeginning Adapter configuration"
-    #Setup guest adapters on the host
-    $AzureStackHCIVMs | ForEach-Object {
-        $thisVM = $_
-
-        Write-Host "`t Creating adapters for $($thisVM.Name)"
-        $theseAdapters = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.Adapters
-
-        #Note: There shouldn't be any NICs in the system at this point, so just add however many you in $theseAdapters
-        1..$theseAdapters.Count | Foreach-Object {
-            Add-VMNetworkAdapter -VMName $thisVM.Name -SwitchName "$($LabConfig.SwitchName)*"
-        }
-    }
+    Get-RSJob | Wait-RSJob   | Out-Null
+    Get-RSJob | Remove-RSJob | Out-Null
 
     #Note: Start to get a MAC on the vNICs to sort them in the future
     Reset-AzStackVMs -Start -VMs $AzureStackHCIVMs
-    Reset-AzStackVMs -Stop -VMs $AzureStackHCIVMs
+    Reset-AzStackVMs -Stop -VMs  $AzureStackHCIVMs
 
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
+        Start-RSJob -Name "$($thisVM.Name)-ConfigureAdapters" -ScriptBlock {
+            $thisJobVM = $using:thisVM
 
-        # Enable Device Naming; attach to the vSwitch; Trunk all possible vlans so that we can set a vlan inside the VM
-        $vmAdapters = Get-VMNetworkAdapter -VMName $thisVM.Name | Sort-Object MacAddress
+            # Enable Device Naming; attach to the vSwitch; Trunk all possible vlans so that we can set a vlan inside the VM
+            $vmAdapters = Get-VMNetworkAdapter -VMName $thisJobVM.Name | Sort-Object MacAddress
 
-        $vmAdapters | ForEach-Object {
-            Set-VMNetworkAdapter -VMNetworkAdapter $_ -DeviceNaming On
-            Set-VMNetworkAdapterVlan -VMName $thisVM.Name -VMNetworkAdapterName $_.Name -Trunk -AllowedVlanIdList 1-4094 -NativeVlanId 0
-        }
+            $vmAdapters | ForEach-Object {
+                Set-VMNetworkAdapter -VMNetworkAdapter $_ -DeviceNaming On
+                Set-VMNetworkAdapterVlan -VMName $thisJobVM.Name -VMNetworkAdapterName $_.Name -Trunk -AllowedVlanIdList 1-4094 -NativeVlanId 0
+            }
 
-        Write-Host "`t Renaming vmNICs for propagation through to the $($thisVM.Name)"
+            #Separate this section
+            #Note: Naming the first 2 Mgmt for easy ID. This can be updated; just trying to keep it simple
+            [Console]::WriteLine("`t Renaming vmNICs for propagation through to the $($thisJobVM.Name)")
 
-        #Note: Naming the first 2 Mgmt for easy ID. This can be updated; just trying to keep it simple
-        $AdapterCount = 1
-        foreach ($NIC in ($vmAdapters | Select-Object -First 2)) {
-            Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName "Mgmt0$AdapterCount"
+            $AdapterCount = 1
+            foreach ($NIC in ($vmAdapters | Select-Object -First 2)) {
+                Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName "Mgmt0$AdapterCount"
+                $AdapterCount ++
+            }
 
-            $AdapterCount ++
-        }
+            $AdapterCount = 0
+            foreach ($NIC in ($vmAdapters | Select-Object -Skip 2)) {
+                if ($AdapterCount -eq 0) { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName 'Ethernet' }
+                Else { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName "Ethernet $AdapterCount" }
 
-        $AdapterCount = 0
-        foreach ($NIC in ($vmAdapters | Select-Object -Skip 2)) {
-            if ($AdapterCount -eq 0) { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName 'Ethernet' }
-            Else { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName "Ethernet $AdapterCount" }
-
-            $AdapterCount ++
+                $AdapterCount ++
+            }
         }
     }
+
+    Get-RSJob | Wait-RSJob | Out-Null
+    Get-RSJob | Remove-RSJob | Out-Null
 
     $AllVMs = @()
     $LabConfig.VMs | ForEach-Object {
@@ -457,9 +469,6 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
             Foreach ($vmNIC in $RenameVMNic) {
-                #$VerbosePreference = 'continue' - Use for testing
-                #Write-Host "`t`t`t NIC being renamed: $($vmNIC.name)"
-                #Write-Host "`t`t`t`t New NIC Name: $($vmNIC.DisplayValue)"
                 Rename-NetAdapter -Name $vmNIC.Name -NewName "$($vmNIC.DisplayValue)"
             }
         }
@@ -630,8 +639,8 @@ Function Initialize-AzureStackHCILabOrchestration {
         Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
     }
 
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
+    Get-RSJob | Wait-RSJob | Out-Null
+    Get-RSJob | Remove-RSJob | Out-Null
 #endregion
 
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
@@ -653,6 +662,5 @@ Function Initialize-AzureStackHCILabOrchestration {
     "Start Time: $StartTime"
     "End Time: $EndTime"
 }
-
 #TODO: Cleanup todos
 #TODO: Test that labconfig is available and not malformed
