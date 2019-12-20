@@ -159,25 +159,27 @@ Function New-AzureStackHCILabEnvironment {
 
     # Rename Guests
     Wait-ForHeartbeatState -State On -VMs $AllVMs
+
     $LabConfig.VMs | Foreach-Object {
         $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
         Write-Host "Checking $thisSystem guest OS name prior to domain creation"
 
-        $CurrentName = Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock { $env:ComputerName }
+        Write-Host "`t Renaming $thisSystem guest OS and rebooting prior to domain creation"
 
-        if ($CurrentName -ne $thisSystem) {
-            Write-Host "`t Renaming $thisSystem guest OS and rebooting prior to domain creation"
+#TODO: Fix This isn't working; localcred remoting isn't working without localhost\username and password
+        Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
+            #Turn off EMS and auto-recovery to prevent startup delays since we're up/downing the system a bunch of times...
+            bcdedit /ems off
+            bcdedit /set recoveryenabled no
 
-            Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
+            if ($env:ComputerName -ne $using:thisSystem) {
                 Rename-Computer -NewName $using:thisSystem -Force -WarningAction SilentlyContinue
-
-                #Turn off EMS to prevent startup delays since we're up/downing the system a bunch of times...
-                bcdedit.exe /ems off
+                Restart-Computer -Force
             }
-
-            Reset-AzStackVMs -Restart -VMs $AllVMs.Where{$_.Name -eq $thisSystem}
         }
     }
+
+    Wait-ForHeartbeatState -State On -VMs $AllVMs
 
     # Configure Lab Domain
     $DCName = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
@@ -196,11 +198,12 @@ Function New-AzureStackHCILabEnvironment {
         $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
         Write-Host "Joining $thisSystem to domain"
 
-#TODO: Only do this if not already joined
-#TODO: Can this be runspaced?
-        $thisDomain = $LabConfig.DomainNetbiosName
+#TODO: In Parallel
         Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
-            Add-Computer -ComputerName $using:thisSystem -LocalCredential $Using:localCred -DomainName $using:thisDomain -Credential $Using:VMCred -Force -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+            if (-not (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain) {
+                $thisDomain = $($using:LabConfig.DomainNetbiosName)
+                Add-Computer -ComputerName $using:thisSystem -LocalCredential $Using:localCred -DomainName $thisDomain -Credential $Using:VMCred -Force -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+            }
         }
     }
 
@@ -381,7 +384,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
             #Note: There shouldn't be any NICs in the system at this point, so just add however many you in $theseAdapters
             1..$theseAdapters.Count | Foreach-Object {
-                Add-VMNetworkAdapter -VMName $thisJobVM.Name -SwitchName "$($thisJobLabConfig.SwitchName)*"
+                Add-VMNetworkAdapter -VMName $thisJobVM.Name -SwitchName "$($thisJobLabConfig.Prefix)-$($thisJobLabConfig.SwitchName)*"
             }
         }
     }
@@ -533,9 +536,9 @@ Function Invoke-AzureStackHCILabVMCustomization {
             }
         }
 
-        $theseSCMDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SCMDrives.Size / 1GB
-        $theseSSDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives.Size / 1GB
-        $theseHDDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives.Size / 1GB
+        $theseSCMDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SCMDrives.Size
+        $theseSSDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives.Size
+        $theseHDDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives.Size
 
         Write-Host "Setting media type for the disks"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {

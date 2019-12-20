@@ -21,7 +21,7 @@ Function Get-LabConfig {
         # This is the name of the switch to attach VMs to. This lab has DHCP so either make a private/internal vSwitch or i'm going to takeover your network
         # If the specified switch doesn't exist a private switch will be created AzureStackHCILab-Guid
         DHCPscope     = '10.0.0.0'
-        SwitchName = 'AzureStackHCILab'
+        SwitchName = 'SiteA'
         VMs = @()
     }
 
@@ -93,6 +93,17 @@ function Wait-ForHeartbeatState {
                     Write-Host "`t Waiting on Heartbeat for: $($_.Name)"
                     Write-Host "`t `t Getting sleepy..."
                     Start-Sleep -Seconds 5
+
+                    $TimesThroughLoop ++
+
+                    if ($TimesThroughLoop -eq 18) {
+                        Write-Host "`t `t $($_.Name) may be in broken state, restarting"
+                        Write-Host "`t `t `t If this continually occurs, this could either indicate an issue with the VM or its taking a long time to start the system"
+                        Write-Host "`t `t `t - Consider lengthening this timeout (in the helpers file) if the latter..."
+                        Stop-VM -VMName $_.Name -Force -ErrorAction SilentlyContinue
+                        Start-Sleep -Seconds 3
+                        Start-VM -VMName $_.Name -ErrorAction SilentlyContinue
+                    }
                 }
 
                 Write-Host "`t Ensuring PowerShell Direct is ready for: $($_.Name)"
@@ -462,11 +473,11 @@ Function Initialize-BaseDisk {
 #Create Domain Controller VM and vSwitch for lab
 Function Add-LabVirtualMachines {
     $Switchname   = $LabConfig.SwitchName
-    $SwitchExists = (Get-VMSwitch -Name "$($LabConfig.Switchname)*" -ErrorAction SilentlyContinue)
+    $SwitchExists = (Get-VMSwitch -Name "$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -ErrorAction SilentlyContinue)
 
     if (-not ($SwitchExists)) {
-        $SwitchGuid = $(((New-Guid).Guid).Substring(0,18))
-        $SwitchName = "AzureStackHCILabSwitch_$SwitchGuid"
+        $SwitchGuid = $(((New-Guid).Guid).Substring(0,10))
+        $SwitchName = "$($LabConfig.Prefix)-$($LabConfig.Switchname)_$SwitchGuid"
 
         Write-Host "`t Creating switch $Switchname"
         New-VMSwitch -SwitchType Private -Name $Switchname | Out-Null
@@ -478,7 +489,7 @@ Function Add-LabVirtualMachines {
         If ($VM) { Write-Host "`t VM named $($LabConfig.Prefix)$($_.VMName) already exists" }
         else {
             Write-Host "`t Creating VM: $($LabConfig.Prefix)$($_.VMName)"
-            $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes $_.MemoryStartupBytes -Path $vmpath -SwitchName "$Switchname*" -Generation 2
+            $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes $_.MemoryStartupBytes -Path $vmpath -SwitchName "$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -Generation 2
             New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -Differencing -ErrorAction SilentlyContinue | Out-Null
             $BootDevice = Add-VMHardDiskDrive -VMName "$($LabConfig.Prefix)$($_.VMName)" -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Passthru -ErrorAction SilentlyContinue
             Set-VMFirmware -VMName "$($LabConfig.Prefix)$($_.VMName)" -BootOrder $BootDevice
