@@ -96,7 +96,7 @@ function Wait-ForHeartbeatState {
 
                     $TimesThroughLoop ++
 
-                    if ($TimesThroughLoop -eq 18) {
+                    if ($TimesThroughLoop -eq 12) {
                         Write-Host "`t `t $($_.Name) may be in broken state, restarting"
                         Write-Host "`t `t `t If this continually occurs, this could either indicate an issue with the VM or its taking a long time to start the system"
                         Write-Host "`t `t `t - Consider lengthening this timeout (in the helpers file) if the latter..."

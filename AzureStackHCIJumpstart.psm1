@@ -174,7 +174,7 @@ Function New-AzureStackHCILabEnvironment {
 
             if ($env:ComputerName -ne $using:thisSystem) {
                 Rename-Computer -NewName $using:thisSystem -Force -WarningAction SilentlyContinue
-                Restart-Computer -Force
+                Restart-Computer
             }
         }
     }
@@ -543,15 +543,15 @@ Function Invoke-AzureStackHCILabVMCustomization {
         Write-Host "Setting media type for the disks"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
             Get-PhysicalDisk | Where-Object Size -eq $using:theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
-                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "PMEM$($_.DeviceID)" -MediaType SCM
+                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-PMEM$($_.DeviceID)" -MediaType SCM
             }
 
             Get-PhysicalDisk | Where-Object Size -eq $using:theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
-                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "SSD$($_.DeviceID)" -MediaType SSD
+                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-SSD$($_.DeviceID)" -MediaType SSD
             }
 
             Get-PhysicalDisk | Where-Object Size -eq $using:theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
-                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "HDD$($_.DeviceID)" -MediaType HDD
+                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-HDD$($_.DeviceID)" -MediaType HDD
             }
         }
 
