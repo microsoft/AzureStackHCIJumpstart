@@ -30,7 +30,7 @@ Function Approve-AzureStackHCILabState {
 
 Function Remove-AzureStackHCILabEnvironment {
     param (
-        # Also destroys basedisk, domain controller, and vSwitch
+        # Also destroys basedisk, domain controller, WAC system, and vSwitch
         [switch] $FireAndBrimstone
     )
 
@@ -54,7 +54,7 @@ Function Remove-AzureStackHCILabEnvironment {
         $AllVMs += Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
     }
 
-    $LabConfig.VMs.Where{$_.Role -ne 'Domain Controller'} | ForEach-Object {
+    $LabConfig.VMs.Where{$_.Role -eq 'AzureStackHCI'} | ForEach-Object {
         $AzureStackHCIVMs += Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
     }
 
@@ -561,6 +561,16 @@ Function Invoke-AzureStackHCILabVMCustomization {
             Get-NetFirewallRule -DisplayName "File and Printer Sharing (SMB-In)" | Enable-NetFirewallRule
         }
     }
+
+    AzureStackHCIVMs | ForEach-Object {
+        Start-RSJob -Name "$($thisVM.Name)-ConfigureAdapters" -ScriptBlock {
+            $thisJobVM = $using:thisVM
+            Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Original'
+        }
+    }
+
+    Get-RSJob | Wait-RSJob | Out-Null
+    Get-RSJob | Remove-RSJob | Out-Null
 
     if ($ranOOB) {
         $EndTime = Get-Date

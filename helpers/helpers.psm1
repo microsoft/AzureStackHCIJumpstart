@@ -49,15 +49,15 @@ Function Get-LabConfig {
             )
         }
     }
-<#
-    #TODO: Build a W10 WAC System
+
+    # Specify WAC System; does not install WAC, just creates server. You will need to ManageAs in WAC due to known CredSSP Bug
     $LABConfig.VMs += @{
         VMName        = 'WAC01'
 
         # This should always be WAC
         Role          = 'WAC'
         MemoryStartupBytes = 8GB
-    }#>
+    }
 
     $LABConfig.VMs += @{
         VMName        = 'DC01'
@@ -103,6 +103,8 @@ function Wait-ForHeartbeatState {
                         Stop-VM -VMName $_.Name -Force -ErrorAction SilentlyContinue
                         Start-Sleep -Seconds 3
                         Start-VM -VMName $_.Name -ErrorAction SilentlyContinue
+
+                        $TimesThroughLoop = 0
                     }
                 }
 
@@ -496,11 +498,14 @@ Function Add-LabVirtualMachines {
             Set-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -IgnoreIdMismatch -ErrorAction SilentlyContinue
         }
 
+
         Set-VMProcessor -VMName "$($LabConfig.Prefix)$($_.VMName)" -Count 4
         Set-VMMemory    -VMName "$($LabConfig.Prefix)$($_.VMName)" -DynamicMemoryEnabled $true -MinimumBytes $_.MemoryStartupBytes
         Set-VMFirmware  -VMName "$($LabConfig.Prefix)$($_.VMName)" -EnableSecureBoot Off
-        Set-VM          -VMName "$($LabConfig.Prefix)$($_.VMName)" -AutomaticCheckpointsEnabled $false
+        Set-VM          -VMName "$($LabConfig.Prefix)$($_.VMName)"  -CheckpointType Production -AutomaticCheckpointsEnabled $false
         Enable-VMIntegrationService -VMName "$($LabConfig.Prefix)$($_.VMName)" -Name 'Guest Service Interface'
+
+        Start-VM -VMName "$($LabConfig.Prefix)$($_.VMName)"
     }
 }
 
