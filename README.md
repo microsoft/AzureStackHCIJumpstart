@@ -23,6 +23,7 @@ By default you only need to update one value to run this
 Note: The long-term goal is that these two commands can all be run independently but additional testing is needed. If you find an issue, file a bug and just keep running the lab orchestration command
 
 ```New-AzureStackHCILabEnvironment```
+
 ```Invoke-AzureStackHCILabVMCustomization```
 
 ### Deploy the entire lab with VM customization
