@@ -562,10 +562,24 @@ Function Invoke-AzureStackHCILabVMCustomization {
         }
     }
 
+    # Stage testing and checkpoints
     AzureStackHCIVMs | ForEach-Object {
         Start-RSJob -Name "$($thisVM.Name)-ConfigureAdapters" -ScriptBlock {
             $thisJobVM = $using:thisVM
-            Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Original'
+
+            [Console]::WriteLine("Creating starting checkpoint for: $($thisJobVM.Name)")
+            While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
+                Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Start'
+            }
+
+            [Console]::WriteLine("`t Installing Stage 1 Features for: $($thisJobVM.Name)")
+            Install-WindowsFeature -Name 'Bitlocker', 'Data-Center-Bridging', 'Failover-Clustering', 'FS-Data-Deduplication', 'Hyper-V', 'RSAT-AD-PowerShell' -Restart
+            Wait-ForHeartbeatState -State On -VMs $thisJobVM
+
+            [Console]::WriteLine("`t Creating Stage 1 checkpoint for: $($thisJobVM.Name)")
+            While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
+                Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
+            }
         }
     }
 
