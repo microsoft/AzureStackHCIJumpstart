@@ -20,12 +20,6 @@ By default you only need to update one value to run this
 
 ## Deployment
 
-Note: The long-term goal is that these two commands can all be run independently but additional testing is needed. If you find an issue, file a bug and just keep running the lab orchestration command
-
-```New-AzureStackHCILabEnvironment```
-
-```Invoke-AzureStackHCILabVMCustomization```
-
 ### Deploy the entire lab with VM customization
 
 ```Initialize-AzureStackHCILabOrchestration```
@@ -38,9 +32,15 @@ Note: The long-term goal is that these two commands can all be run independently
 
 ```Invoke-AzureStackHCILabVMCustomization```
 
+Note: The long-term goal is that these two commands can all be run independently but additional testing is needed. If you find an issue, file a bug and just keep running the lab orchestration command
+
+```New-AzureStackHCILabEnvironment```
+
+```Invoke-AzureStackHCILabVMCustomization```
+
 ## Destruction
 
-**Removes all HCI VMs (Hyper-V Hosts and WAC VM)**
+**Removes all HCI VMs (Hyper-V Hosts)**
 
 ```Remove-AzureStackHCILabEnvironment```
 
