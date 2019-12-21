@@ -56,7 +56,7 @@ Function Get-LabConfig {
 
         # This should always be WAC
         Role          = 'WAC'
-        MemoryStartupBytes = 8GB
+        MemoryStartupBytes = 4GB
     }
 
     $LABConfig.VMs += @{
@@ -64,7 +64,7 @@ Function Get-LabConfig {
 
         # This should always be Domain Controller
         Role          = 'Domain Controller'
-        MemoryStartupBytes = 8GB
+        MemoryStartupBytes = 2GB
     }
 
     # No touchie! Required but no mods needed - Prep local and domain creds
@@ -482,7 +482,7 @@ Function Add-LabVirtualMachines {
         $SwitchName = "$($LabConfig.Prefix)-$($LabConfig.Switchname)_$SwitchGuid"
 
         Write-Host "`t Creating switch $Switchname"
-        New-VMSwitch -SwitchType Private -Name $Switchname | Out-Null
+        New-VMSwitch -SwitchType Internal -Name $Switchname | Out-Null
     }
 
     $LabConfig.VMs | ForEach-Object {

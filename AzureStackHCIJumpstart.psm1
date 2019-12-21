@@ -564,7 +564,7 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
     # Stage testing and checkpoints
     AzureStackHCIVMs | ForEach-Object {
-        Start-RSJob -Name "$($thisVM.Name)-ConfigureAdapters" -ScriptBlock {
+        Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints" -ScriptBlock {
             $thisJobVM = $using:thisVM
 
             [Console]::WriteLine("Creating starting checkpoint for: $($thisJobVM.Name)")
@@ -585,6 +585,38 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
     Get-RSJob | Wait-RSJob | Out-Null
     Get-RSJob | Remove-RSJob | Out-Null
+
+    Remove-Variable ClusterNodes -ErrorAction SilentlyContinue
+    $LabConfig.VMs.Where{$_.Role -eq 'AzureStackHCI'} | ForEach-Object {
+        $ClusterNodes = $ClusterNodes + "'$($LabConfig.Prefix)$($_.VMName)', "
+    }
+
+    #Note: Regex ($ start at the end) and remove the last two characters (..) regardless of what they are
+    #      This gets rid of the trailing ', ' after the last VMName...Probably a better way to do this...
+    $ClusterNodes = $ClusterNodes -Replace "..$"
+
+    # Do Stage 3 separately because we need all servers to be up and this run from one of the nodes
+    Start-RSJob -Name "$($thisVM.Name)-Stage 3 Checkpoint" -ScriptBlock {
+        $thisJobVM = $using:thisVM
+        Test-Cluster -Node $using:ClusterNodes
+
+        #TODO: Create Cluster
+
+        [Console]::WriteLine("`t Creating Stage 3 checkpoint")
+        While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
+            Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
+        }
+    }
+
+        # Apply Starting Checkpoint
+        AzureStackHCIVMs | ForEach-Object {
+            Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints" -ScriptBlock {
+                $thisJobVM = $using:thisVM
+
+                [Console]::WriteLine("Applying starting checkpoint for: $($thisJobVM.Name)")
+                Restore-VMCheckpoint -Name Start -VMName $thisJobVM.Name -Confirm:$false
+            }
+        }
 
     if ($ranOOB) {
         $EndTime = Get-Date
