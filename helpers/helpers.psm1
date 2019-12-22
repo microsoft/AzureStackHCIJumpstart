@@ -77,6 +77,8 @@ Function Get-LabConfig {
 }
 
 #region Used for VM/Lab configuration
+
+#TODO: Update with rsJob
 function Wait-ForHeartbeatState {
     param (
         [Parameter(Mandatory=$true)]
@@ -90,16 +92,16 @@ function Wait-ForHeartbeatState {
         'On' {
             $VMs | ForEach-Object {
                 While ((Get-VMIntegrationService -VMName $_.Name -Name Heartbeat).PrimaryStatusDescription -ne 'Ok') {
-                    Write-Host "`t Waiting on Heartbeat for: $($_.Name)"
-                    Write-Host "`t `t Getting sleepy..."
+                    [Console]::WriteLine("`t Waiting on Heartbeat for: $($_.Name)")
+                    [Console]::WriteLine("`t `t Getting sleepy...")
                     Start-Sleep -Seconds 5
 
                     $TimesThroughLoop ++
 
                     if ($TimesThroughLoop -eq 12) {
-                        Write-Host "`t `t $($_.Name) may be in broken state, restarting"
-                        Write-Host "`t `t `t If this continually occurs, this could either indicate an issue with the VM or its taking a long time to start the system"
-                        Write-Host "`t `t `t - Consider lengthening this timeout (in the helpers file) if the latter..."
+                        [Console]::WriteLine("`t `t $($_.Name) may be in broken state, restarting")
+                        [Console]::WriteLine("`t `t `t If this continually occurs, this could either indicate an issue with the VM or its taking a long time to start the system")
+                        [Console]::WriteLine("`t `t `t - Consider lengthening this timeout (in the helpers file) if the latter...")
                         Stop-VM -VMName $_.Name -Force -ErrorAction SilentlyContinue
                         Start-Sleep -Seconds 3
                         Start-VM -VMName $_.Name -ErrorAction SilentlyContinue
@@ -108,10 +110,10 @@ function Wait-ForHeartbeatState {
                     }
                 }
 
-                Write-Host "`t Ensuring PowerShell Direct is ready for: $($_.Name)"
+                [Console]::WriteLine("`t Ensuring PowerShell Direct is ready for: $($_.Name)")
 
                 do {
-                    Write-Host "`t `t Checking PowerShell Direct on $($_.Name)...Getting sleepy again"
+                    [Console]::WriteLine("`t `t Checking PowerShell Direct on $($_.Name)...Getting sleepy again")
                     $Availability = New-PSSession -VMName $($_.Name) -Credential $localCred -ErrorAction SilentlyContinue
 
                     Start-Sleep -Seconds 5
@@ -132,6 +134,7 @@ function Wait-ForHeartbeatState {
     }
 }
 
+#TODO: Update with rsJob
 Function Reset-AzStackVMs {
     param (
         [Switch] $Start    ,
@@ -291,7 +294,7 @@ Function Initialize-BaseDisk {
                     $thisModule = $_
 
                     start-rsjob -Name "$thisModule-Modules" -ScriptBlock {
-                        Copy-Item -Path "C:\Program Files\WindowsPowerShell\Modules\$($using:thisModule)" -Destination "$MountPath\Program Files\WindowsPowerShell\Modules\" -Recurse -Force
+                        Copy-Item -Path "C:\Program Files\WindowsPowerShell\Modules\$($using:thisModule)" -Destination "$($using:MountPath)\Program Files\WindowsPowerShell\Modules\" -Recurse -Force
                     }
                 }
 
@@ -355,12 +358,12 @@ Function Initialize-BaseDisk {
             }
 
             xADUser Domain_Admin {
-                DomainName = $LabConfig.DomainName
                 DomainAdministratorCredential = $domainCred
-                UserName = $LabConfig.DomainAdminName
-                Password = $NewADUserCred
-                Ensure = "Present"
-                Description = "DomainAdmin"
+                Ensure      = 'Present'
+                DomainName  = $LabConfig.DomainName
+                UserName    = $LabConfig.DomainAdminName
+                Password    = $NewADUserCred
+                Description = 'DomainAdmin'
                 PasswordNeverExpires = $true
                 DependsOn = '[xADDomain]FirstDS'
             }
@@ -500,7 +503,7 @@ Function Add-LabVirtualMachines {
 
 
         Set-VMProcessor -VMName "$($LabConfig.Prefix)$($_.VMName)" -Count 4
-        Set-VMMemory    -VMName "$($LabConfig.Prefix)$($_.VMName)" -DynamicMemoryEnabled $true -MinimumBytes $_.MemoryStartupBytes
+        Set-VMMemory    -VMName "$($LabConfig.Prefix)$($_.VMName)" -DynamicMemoryEnabled $true
         Set-VMFirmware  -VMName "$($LabConfig.Prefix)$($_.VMName)" -EnableSecureBoot Off
         Set-VM          -VMName "$($LabConfig.Prefix)$($_.VMName)"  -CheckpointType Production -AutomaticCheckpointsEnabled $false
         Enable-VMIntegrationService -VMName "$($LabConfig.Prefix)$($_.VMName)" -Name 'Guest Service Interface'
