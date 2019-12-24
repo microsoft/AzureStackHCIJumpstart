@@ -94,7 +94,7 @@ Function Remove-AzureStackHCILabEnvironment {
         }
 
         Write-Host " - Destroying vSwitch and Nat"
-        Remove-VMSwitch "$($LabConfig.SwitchName)*" -Force -ErrorAction SilentlyContinue
+        Remove-VMSwitch "$($LabConfig.Prefix)-$($LabConfig.SwitchName)*" -Force -ErrorAction SilentlyContinue
         Get-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.SwitchName)" | Remove-NetNat -Confirm:$false
 
         Write-Host " - Destroying BaseDisk at $VMPath "
@@ -180,7 +180,7 @@ Function New-AzureStackHCILabEnvironment {
                 [Console]::WriteLine("`t Reparenting $($thisJobVM.Name) OSD to $NewBasePath")
                 $VHDXToConvert | Set-VHD -ParentPath $NewBasePath -IgnoreIdMismatch
             }
-        }
+        } | Out-Null
     }
 
     #Note: We've got time on our side here...Domain is being configured and reparenting is occuring which means we can get other stuff done while waiting.
@@ -193,9 +193,9 @@ Function New-AzureStackHCILabEnvironment {
     New-AzureStackHCIVMAdapters
 
     # Cleanup Ghosts; System must be on but will require a full shutdown (not restart) to complete the removal so don't rename NICs yet.
+    #Note: Ignore Loop count as this is the first start. Long startup is likely just sign of slow disks.
+    Wait-ForHeartbeatState -State On -VMs $AllVMs -IgnoreLoopCount
 
-    Wait-ForHeartbeatState -State On -VMs $AllVMs
-<#
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
 
@@ -221,7 +221,7 @@ Function New-AzureStackHCILabEnvironment {
         Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
             if (-not (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain) {
                 $thisDomain = $($using:LabConfig.DomainNetbiosName)
-                Add-Computer -ComputerName $using:thisSystem -LocalCredential $Using:localCred -DomainName $thisDomain -Credential $Using:VMCred -Force -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+                Add-Computer -DomainName $thisDomain -LocalCredential $Using:localCred -Credential $Using:VMCred -Force -WarningAction SilentlyContinue
             }
 
             Get-NetFirewallRule -DisplayName "*File and Printer Sharing (Echo Request*In)" | Enable-NetFirewallRule
@@ -230,11 +230,11 @@ Function New-AzureStackHCILabEnvironment {
     }
 
     # Make sure all previous jobs have completed
-    Get-RSJob | Wait-RSJob | Out-Null
-    Get-RSJob | Remove-RSJob | Out-Null
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 
     Write-Host 'Shutting down VMs for OSD Merge'
-    Reset-AzStackVMs -Stop -VMs $AllVMs
+    Reset-AzStackVMs -Shutdown -VMs $AllVMs -Wait
 
     # Add S2D Disks needed for lab. System must be off to add SCSI controllers
     New-AzureStackHCIVMS2DDisks
@@ -262,14 +262,15 @@ Function New-AzureStackHCILabEnvironment {
                 Add-VMHardDiskDrive -VM $thisJobVM -Path $BaseDiskPath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
             }
             Else { [Console]::WriteLine("`t $($thisJobVM.Name) VHDX has already been merged - backslash Ignore") }
-        }
+        } | Out-Null
     }
 
-    Get-RSJob | Wait-RSJob | Out-Null
-    Get-RSJob | Remove-RSJob | Out-Null
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 
-    <# Once merged, start VMs, then continue configuration inside the guest.
-    Previous tasks needed the shutdown/reboot anyway e.g. domain join and ghost NIC removal #>
+    # Once merged, start VMs, then continue configuration inside the guest.
+    # Previous tasks needed the shutdown/reboot anyway e.g. domain join and ghost NIC removal
+
     Reset-AzStackVMs -Start -VMs $AllVMs -Wait
 
     # Rename Adapters inside guest
@@ -350,8 +351,8 @@ Function New-AzureStackHCILabEnvironment {
             }
         }
     }
-#>
-    Write-Host "Completed Environment Setup"
+
+    Write-Host 'Completed Environment Setup'
 
     if ($ranOOB) {
         Write-Host "`t Since this was run without orchestration, you may still need to customize using Invoke-AzureStackHCILabVMCustomization"
@@ -395,11 +396,11 @@ Function Invoke-AzureStackHCILabVMCustomization {
                 [Console]::WriteLine("`t Creating starting checkpoint for: $($thisJobVM.Name)")
                 Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Start'
             }
-        }
+        } | Out-Null
     }
 
-    Get-RSJob | Wait-RSJob | Out-Null
-    Get-RSJob | Remove-RSJob | Out-Null
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
@@ -410,11 +411,11 @@ Function Invoke-AzureStackHCILabVMCustomization {
             Invoke-Command -VMName $thisJobVM.Name -Credential $using:VMCred -ScriptBlock {
                 Install-WindowsFeature -Name 'Bitlocker', 'Data-Center-Bridging', 'Failover-Clustering', 'FS-Data-Deduplication', 'Hyper-V', 'RSAT-AD-PowerShell' -IncludeManagementTools
             }
-        }
+        } | Out-Null
     }
 
-    Get-RSJob | Wait-RSJob | Out-Null
-    Get-RSJob | Remove-RSJob | Out-Null
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 
     #Note: Reboot to complete the installations, then wait again in case multiple reboots occur. Do sequential
     Write-Host "Restarting VMs following feature installation for stage 1 checkpoint"
@@ -437,8 +438,8 @@ Function Invoke-AzureStackHCILabVMCustomization {
         }
     }
 
-    Get-RSJob | Wait-RSJob | Out-Null
-    Get-RSJob | Remove-RSJob | Out-Null
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 
     # Do Stage 3 separately because we need all servers to be up and this run from one of the nodes
     $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
@@ -478,8 +479,8 @@ Function Invoke-AzureStackHCILabVMCustomization {
         }
     }
 
-    Get-RSJob | Wait-RSJob | Out-Null
-    Get-RSJob | Remove-RSJob | Out-Null
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 
     # Apply Starting Checkpoint
     $AzureStackHCIVMs | ForEach-Object {
@@ -488,11 +489,11 @@ Function Invoke-AzureStackHCILabVMCustomization {
 
             [Console]::WriteLine("Applying starting checkpoint for: $($thisJobVM.Name)")
             Restore-VMSnapshot -Name Start -VMName $thisJobVM.Name -Confirm:$false
-        }
+        } | Out-Null
     }
 
-    Get-RSJob | Wait-RSJob | Out-Null
-    Get-RSJob | Remove-RSJob | Out-Null
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 
     if ($ranOOB) {
         $EndTime = Get-Date
@@ -559,7 +560,7 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     Write-Host "Importing Modules from: $here\helpers"
 #region Temporary unti; added to posh gallery
-    Copy-Item -Path "$here\helpers\ModulesTillPublishedonGallery\PoshRSJob" -Recurse -Destination "C:\Program Files\WindowsPowerShell\Modules\PoshRSJob" -Container -ErrorAction SilentlyContinue
+    Copy-Item -Path "$here\helpers\ModulesTillPublishedonGallery\PoshRSJob" -Recurse -Destination "C:\Program Files\WindowsPowerShell\Modules\PoshRSJob" -Container -ErrorAction SilentlyContinue | Out-Null
     Import-Module -Name PoshRSJob -Force -Global -ErrorAction SilentlyContinue
 
     Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" -Exclude PoshRSJob | foreach-Object {
@@ -567,15 +568,15 @@ Function Initialize-AzureStackHCILabOrchestration {
         $path = $_.FullName
         $destPath = "C:\Program Files\WindowsPowerShell\Modules\$_"
 
-        start-rsjob -Name "$thisModule-Modules" -ScriptBlock {
+        Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {
             Copy-Item -Path $using:path -Recurse -Destination $using:destPath -Container -Force -ErrorAction SilentlyContinue
-        }
+        } | Out-Null
 
         Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
     }
 
-    Get-RSJob | Wait-RSJob | Out-Null
-    Get-RSJob | Remove-RSJob | Out-Null
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 #endregion
 
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'

@@ -305,15 +305,15 @@ Function Initialize-BaseDisk {
             Else {
                 Write-Host "`t Unattend file does not exist...Updating..."
 
-                New-Item -Path "$MountPath\Windows\Panther" -ItemType Directory -Force -InformationAction SilentlyContinue
+                New-Item -Path "$MountPath\Windows\Panther" -ItemType Directory -Force | Out-Null
                 Use-WindowsUnattend -Path $MountPath -UnattendPath $unattendfile -InformationAction SilentlyContinue
 
                 'xActiveDirectory', 'xDNSServer', 'NetworkingDSC', 'xDHCPServer', 'xPSDesiredStateConfiguration' | foreach-Object {
                     $thisModule = $_
 
-                    start-rsjob -Name "$thisModule-Modules" -ScriptBlock {
+                    Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {
                         Copy-Item -Path "C:\Program Files\WindowsPowerShell\Modules\$($using:thisModule)" -Destination "$($using:MountPath)\Program Files\WindowsPowerShell\Modules\" -Recurse -Force
-                    }
+                    } | Out-Null
                 }
 
                 Get-RSJob | Wait-RSJob
@@ -510,13 +510,12 @@ Function Add-LabVirtualMachines {
     }
 
     # If existing NAT is named wrong, delete then readd; else create the NAT
-    $ExistingNat = Get-NetNat | Where InternalIPInterfaceAddressPrefix -like "$($LabConfig.DHCPScope)*"
+    $ExistingNat = Get-NetNat | Where-Object InternalIPInterfaceAddressPrefix -like "$($LabConfig.DHCPScope)*"
 
     If ($ExistingNat.Name -ne "Nat-$($LabConfig.Prefix)-$($LabConfig.Switchname)") {
         Get-NetNat | Where InternalIPInterfaceAddressPrefix -like "$($LabConfig.DHCPScope)*" | Remove-NetNat -Confirm:$false
         New-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.Switchname)" -InternalIPInterfaceAddressPrefix ($LabConfig.DHCPscope + "/24")
     }
-    Else { New-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.Switchname)" -InternalIPInterfaceAddressPrefix ($LabConfig.DHCPscope + "/24") }
 
     $LabConfig.VMs | ForEach-Object {
         $VM = Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
@@ -580,7 +579,6 @@ Function Wait-ForAzureStackHCIDomain {
 
     do {
         # Use local cred until domain is created
-        #temp $DCName = 'AzStackHCIDC01'
         $DscConfigurationStatus = Invoke-Command -VMName $DCName -ScriptBlock {
             Get-DscConfigurationStatus -ErrorAction SilentlyContinue
         } -Credential $localCred -ErrorAction SilentlyContinue
@@ -648,7 +646,7 @@ Function Remove-AzureStackHCIVMHardware {
 
             [Console]::WriteLine("`t Removing virtual adapters from: $($thisJobVM.Name)")
             Get-VMNetworkAdapter -VMName $thisJobVM.Name | ForEach-Object { Remove-VMNetworkAdapter -VMName $thisJobVM.Name }
-        }
+        } | Out-Null
     }
 }
 
@@ -716,7 +714,7 @@ Function New-AzureStackHCIVMS2DDisks {
                     Add-VMHardDiskDrive -VMName $thisJobVM.Name -Path "$HDDPath\$($thisJobVM.Name)-HDD-$_.VHDX" -ControllerType SCSI -ControllerNumber 3 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
                 }
             }
-        }
+        } | Out-Null
     }
 }
 
@@ -798,6 +796,8 @@ Function New-AzureStackHCIVMAdapters {
 
                 $AdapterCount ++
             }
-        }
+        } | Out-Null
     }
+
+    Get-RSJob | Where-Object Name -like "*-ConfigureAdapters" | Wait-RSJob | Out-Null
 }

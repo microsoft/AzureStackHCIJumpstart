@@ -1,5 +1,3 @@
-New-Item -Path c:\itran.txt
-
 # Get the virtual machine name from the parent partition
 $vmName = (Get-ItemProperty -path "HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters").VirtualMachineName
 
