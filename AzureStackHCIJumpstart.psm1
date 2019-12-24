@@ -431,9 +431,9 @@ Function Invoke-AzureStackHCILabVMCustomization {
             $thisJobVM = $using:thisVM
 
             [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisVM.Name)")
-            While (-not (Get-VMSnapshot -VMName $thisVM.Name -Name 'Stage 1 Complete')) {
-                [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisVM.Name)")
-                Checkpoint-VM -Name $thisVM.Name -SnapshotName 'Stage 1 Complete'
+            While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete')) {
+                [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
+                Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
             }
         }
     }
