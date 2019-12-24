@@ -18,9 +18,11 @@ Function Get-LabConfig {
         # This is the filepath to the ISO that will be used to deploy the lab VMs
         ServerISOFolder   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
-        # This is the name of the switch to attach VMs to. This lab has DHCP so either make a private/internal vSwitch or i'm going to takeover your network
-        # If the specified switch doesn't exist a private switch will be created AzureStackHCILab-Guid
+        # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
+        # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
+        #Note: Only /24 is supported right now.
         DHCPscope     = '10.0.0.0'
+
         SwitchName = 'SiteA'
         VMs = @()
     }
@@ -85,8 +87,12 @@ function Wait-ForHeartbeatState {
         [ValidateSet('On', 'Off')]
         [string] $State ,
 
+        [Switch] $IgnoreLoopCount ,
+
         [Microsoft.HyperV.PowerShell.VirtualMachine[]] $VMs
     )
+
+    Remove-Variable TimesThroughLoop -ErrorAction SilentlyContinue
 
     Switch ($State) {
         'On' {
@@ -96,12 +102,13 @@ function Wait-ForHeartbeatState {
                     [Console]::WriteLine("`t `t Getting sleepy...")
                     Start-Sleep -Seconds 5
 
-                    $TimesThroughLoop ++
+                    if (-not ($IgnoreLoopCount)) { $TimesThroughLoop ++ }
 
+                    # Give machines 1 minute to startup if $IgnoreLoopCount -eq $false;
                     if ($TimesThroughLoop -eq 12) {
-                        [Console]::WriteLine("`t `t $($_.Name) may be in broken state, restarting")
+                        [Console]::WriteLine("`t `t $($_.Name) may be in broken state. Trying to recover by restarting")
                         [Console]::WriteLine("`t `t `t If this continually occurs, this could either indicate an issue with the VM or its taking a long time to start the system")
-                        [Console]::WriteLine("`t `t `t - Consider lengthening this timeout (in the helpers file) if the latter...")
+                        [Console]::WriteLine("`t `t `t - Consider lengthening this timeout (in the helpers file) if the latter")
                         Stop-VM -VMName $_.Name -Force -ErrorAction SilentlyContinue
                         Start-Sleep -Seconds 3
                         Start-VM -VMName $_.Name -ErrorAction SilentlyContinue
@@ -218,46 +225,52 @@ Function New-UnattendFileForVHD {
 
     New-Item "$Path\Unattend.xml" -type File -Force -OutVariable unattendFile | Out-Null
     $fileContent =  @"
-<?xml version='1.0' encoding='utf-8'?>
-<unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-
-<settings pass="offlineServicing">
-<component
-    xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    language="neutral"
-    name="Microsoft-Windows-PartitionManager"
-    processorArchitecture="amd64"
-    publicKeyToken="31bf3856ad364e35"
-    versionScope="nonSxS"
-    >
-    <SanPolicy>1</SanPolicy>
-</component>
-</settings>
-<settings pass="specialize">
-<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-    <ComputerName>*</ComputerName>
-    <RegisteredOwner>$($LabConfig.DomainAdminName)</RegisteredOwner>
-    <RegisteredOrganization>$($LabConfig.DomainNetbiosName)</RegisteredOrganization>
-</component>
-</settings>
-<settings pass="oobeSystem">
-<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-    <UserAccounts>
-    <AdministratorPassword>
-        <Value>$($LabConfig.AdminPassword)</Value>
-        <PlainText>true</PlainText>
-    </AdministratorPassword>
-    </UserAccounts>
-    <OOBE>
-    <HideEULAPage>true</HideEULAPage>
-    <SkipMachineOOBE>true</SkipMachineOOBE>
-    <SkipUserOOBE>true</SkipUserOOBE>
-    </OOBE>
-    <TimeZone>$TimeZone</TimeZone>
-</component>
-</settings>
-</unattend>
+    <?xml version="1.0" encoding="utf-8"?>
+    <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <settings pass="offlineServicing">
+            <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+            </component>
+        </settings>
+        <settings pass="oobeSystem">
+            <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+                <AutoLogon>
+                    <Password>
+                        <Value>$($LabConfig.AdminPassword)</Value>
+                        <PlainText>true</PlainText>
+                    </Password>
+                    <LogonCount>1</LogonCount>
+                    <Username>Administrator</Username>
+                    <Enabled>true</Enabled>
+                </AutoLogon>
+                <FirstLogonCommands>
+                    <SynchronousCommand wcm:action="add">
+                        <CommandLine>C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -ExecutionPolicy bypass -File C:\FirstLogon.ps1</CommandLine>
+                        <Order>1</Order>
+                        <RequiresUserInput>false</RequiresUserInput>
+                    </SynchronousCommand>
+                </FirstLogonCommands>
+                <UserAccounts>
+                    <AdministratorPassword>
+                        <Value>$($LabConfig.AdminPassword)</Value>
+                        <PlainText>true</PlainText>
+                    </AdministratorPassword>
+                </UserAccounts>
+                <OOBE>
+                    <HideEULAPage>true</HideEULAPage>
+                    <SkipMachineOOBE>true</SkipMachineOOBE>
+                    <SkipUserOOBE>true</SkipUserOOBE>
+                </OOBE>
+                <TimeZone>$TimeZone</TimeZone>
+            </component>
+        </settings>
+        <settings pass="specialize">
+            <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+                <ComputerName>*</ComputerName>
+                <RegisteredOwner>$($LabConfig.DomainAdminName)</RegisteredOwner>
+                <RegisteredOrganization>$($LabConfig.DomainNetbiosName)</RegisteredOrganization>
+            </component>
+        </settings>
+    </unattend>
 
 "@
 
@@ -269,6 +282,11 @@ Function New-UnattendFileForVHD {
 
 #Customize Base Disk
 Function Initialize-BaseDisk {
+    # Create Unattend File; remove old unattend
+    $TimeZone  = (Get-TimeZone).id
+    Remove-Item -Path "$VMPath\buildData\Unattend.xml" -Force -ErrorAction SilentlyContinue
+    New-UnattendFileForVHD -TimeZone $TimeZone -AdminPassword $LabConfig.AdminPassword -Path "$VMPath\buildData"
+
     #Apply Unattend to VM
     Write-Host "`t Applying Unattend and copying DSC Modules"
     $unattendfile = "$VMPath\buildData\Unattend.xml"
@@ -303,6 +321,8 @@ Function Initialize-BaseDisk {
 
                 Copy-Item -Path $unattendfile -Destination "$MountPath\Windows\Panther\unattend.xml" -Force
             }
+
+            Copy-Item -Path "$here\helpers\FirstLogon.ps1" -Destination "$MountPath\FirstLogon.ps1" -Force -ErrorAction SilentlyContinue
         }
         Else { Write-Host "`t $VHDPath could not be mounted but was found (likely in use)" }
     }
@@ -319,7 +339,7 @@ Function Initialize-BaseDisk {
     $DHCPscope = $LabConfig.DHCPscope
     $ReverseDNSrecord = $DHCPscope -replace '^(\d+)\.(\d+)\.\d+\.(\d+)$','$3.$2.$1.in-addr.arpa'
     $DHCPscope = $DHCPscope.Substring(0,$DHCPscope.Length-1)
-    $DCIP = ($DHCPscope+"1/24")
+    $DCIP = ($DHCPscope+'10/24')
 
     #Create DSC configuration
     Configuration DCHydration {
@@ -397,7 +417,7 @@ Function Initialize-BaseDisk {
             xDhcpServerScope ManagementScope {
                 Ensure        = 'Present'
                 ScopeId       = ($DHCPscope + '0')
-                IPStartRange  = ($DHCPscope + '10')
+                IPStartRange  = ($DHCPscope + '11')
                 IPEndRange    = ($DHCPscope + '254')
                 Name          = 'ManagementScope'
                 SubnetMask    = '255.255.255.0'
@@ -409,13 +429,13 @@ Function Initialize-BaseDisk {
 
             xDhcpServerOption MgmtScopeRouterOption {
                 Ensure    = 'Present'
-                ScopeID   = ($DHCPscope+"0")
+                ScopeID   = ($DHCPscope + '0')
                 DnsDomain = $Node.DomainName
 
-                DnsServerIPAddress = ($DHCPscope+"1")
+                DnsServerIPAddress = ($DHCPscope + '10')
                 AddressFamily      = 'IPv4'
 
-                Router    = ($DHCPscope+"1")
+                Router    = ($DHCPscope + '1')
                 DependsOn = '[Service]DHCPServer'
             }
 
@@ -447,10 +467,6 @@ Function Initialize-BaseDisk {
                 RetryIntervalSec = 30
             }
         )
-    }
-
-    If ($ConfigData -eq $null) {
-        Write-Error "ConfigData could not be generated for some reason, this will prevent the creation of the MOF file...Please investigate" -ErrorAction Stop
     }
 
     #create LCM config
@@ -485,8 +501,22 @@ Function Add-LabVirtualMachines {
         $SwitchName = "$($LabConfig.Prefix)-$($LabConfig.Switchname)_$SwitchGuid"
 
         Write-Host "`t Creating switch $Switchname"
-        New-VMSwitch -SwitchType Internal -Name $Switchname | Out-Null
+        $VMSwitch = New-VMSwitch -SwitchType Internal -Name $Switchname
+
+        Rename-NetAdapter -Name "*$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -NewName "NATGW-$($LabConfig.Prefix)-$($LabConfig.Switchname)"
+
+        $GatewayIP = "$($LabConfig.DHCPscope.Substring(0,$LabConfig.DHCPscope.Length-1))1"
+        New-NetIPAddress -IPAddress $GatewayIP -PrefixLength 24 -InterfaceAlias "NATGW-$($LabConfig.Prefix)-$($LabConfig.Switchname)"
     }
+
+    # If existing NAT is named wrong, delete then readd; else create the NAT
+    $ExistingNat = Get-NetNat | Where InternalIPInterfaceAddressPrefix -like "$($LabConfig.DHCPScope)*"
+
+    If ($ExistingNat.Name -ne "Nat-$($LabConfig.Prefix)-$($LabConfig.Switchname)") {
+        Get-NetNat | Where InternalIPInterfaceAddressPrefix -like "$($LabConfig.DHCPScope)*" | Remove-NetNat -Confirm:$false
+        New-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.Switchname)" -InternalIPInterfaceAddressPrefix ($LabConfig.DHCPscope + "/24")
+    }
+    Else { New-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.Switchname)" -InternalIPInterfaceAddressPrefix ($LabConfig.DHCPscope + "/24") }
 
     $LabConfig.VMs | ForEach-Object {
         $VM = Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
@@ -502,13 +532,11 @@ Function Add-LabVirtualMachines {
         }
 
 
-        Set-VMProcessor -VMName "$($LabConfig.Prefix)$($_.VMName)" -Count 4
+        Set-VMProcessor -VMName "$($LabConfig.Prefix)$($_.VMName)" -Count 4 -ExposeVirtualizationExtensions $true
         Set-VMMemory    -VMName "$($LabConfig.Prefix)$($_.VMName)" -DynamicMemoryEnabled $true
         Set-VMFirmware  -VMName "$($LabConfig.Prefix)$($_.VMName)" -EnableSecureBoot Off
         Set-VM          -VMName "$($LabConfig.Prefix)$($_.VMName)"  -CheckpointType Production -AutomaticCheckpointsEnabled $false
         Enable-VMIntegrationService -VMName "$($LabConfig.Prefix)$($_.VMName)" -Name 'Guest Service Interface'
-
-        Start-VM -VMName "$($LabConfig.Prefix)$($_.VMName)"
     }
 }
 
@@ -541,6 +569,13 @@ Function Assert-LabDomain {
             Set-DscLocalConfigurationManager -Path "$($using:VMPath)\buildData\config"          -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
             Start-DscConfiguration           -Path "$($using:VMPath)\buildData\config" -Verbose -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
         }
+    }
+}
+
+Function Wait-ForAzureStackHCIDomain {
+    #TODO: Remove duplicate declaration; Also in Assert-LabDomain
+    $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' } | Foreach-Object {
+        $DCName = "$($LabConfig.Prefix)$($_.VMName)"
     }
 
     do {
@@ -584,3 +619,185 @@ Function Assert-LabDomain {
     }
 }
 #endregion
+
+
+Function Remove-AzureStackHCIVMHardware {
+    # Cleanup; Remove existing drives (except OS); Remove existing NICs (except OS)
+
+    $AzureStackHCIVMs | ForEach-Object {
+        $thisVM = $_
+
+        Start-RSJob -Name "$($thisVM.Name)-VMHardware Cleanup" -ScriptBlock {
+            $thisJobVM = $using:thisVM
+
+            Get-VMScsiController -VMName $thisJobVM.Name | ForEach-Object {
+                $thisSCSIController = $_
+
+                [Console]::WriteLine("`t Removing old drives from: $($thisJobVM.Name)")
+                $thisSCSIController.Drives | ForEach-Object {
+                    $thisVMDrive = $_
+
+                    if (-not ($thisVMDrive.ControllerNumber -eq 0 -and $thisVMDrive.ControllerLocation -eq 0)) { $thisVMDrive | Remove-VMHardDiskDrive }
+                }
+
+                if ($thisSCSIController.ControllerNumber -ne 0) {
+                    [Console]::WriteLine("`t `t Removing old SCSI controllers for: $($thisJobVM.Name)")
+                    Remove-VMScsiController -VMName $thisJobVM.Name -ControllerNumber 1
+                }
+            }
+
+            [Console]::WriteLine("`t Removing virtual adapters from: $($thisJobVM.Name)")
+            Get-VMNetworkAdapter -VMName $thisJobVM.Name | ForEach-Object { Remove-VMNetworkAdapter -VMName $thisJobVM.Name }
+        }
+    }
+}
+
+# Create and attach new drives; then adapters
+Function New-AzureStackHCIVMS2DDisks {
+    $AzureStackHCIVMs | ForEach-Object {
+        $thisVM = $_
+
+        Start-RSJob -Name "$($thisVM.Name)-CreateAndAttachDisks" -ScriptBlock {
+            $thisJobVM = $using:thisVM
+
+            #Note: After Lab Environment is deployed, there should be 1 SCSI controller for the OSD.
+            #      This step will add 3 more. If this gets messed up re-run lab environment setup.
+            [Console]::WriteLine("`t Creating SCSI Controllers for $($thisJobVM.Name)")
+            1..3 | Foreach-Object { Add-VMScsiController -VMName $thisJobVM.Name -ErrorAction SilentlyContinue }
+
+            # Remove all the old drives and recreate. Simpler than checking that each disk hasn't been used.
+            #Note: This may not work once the checkpoints are introduced.
+            $thisVMPath = Join-path $thisJobVM.Path 'Virtual Hard Disks\DataDisks'
+            Remove-Item -Path $thisVMPath -Recurse -Force -ErrorAction SilentlyContinue
+
+            $SCMPath = New-Item -Path (Join-Path $thisVMPath 'SCM') -ItemType Directory -Force
+            $SSDPath = New-Item -Path (Join-Path $thisVMPath 'SSD') -ItemType Directory -Force
+            $HDDPath = New-Item -Path (Join-Path $thisVMPath 'HDD') -ItemType Directory -Force
+
+            $thisJobLabConfig = $using:LabConfig
+            $theseSCMDrives   = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.SCMDrives
+            $theseSSDDrives   = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.SSDDrives
+            $theseHDDDrives   = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.HDDDrives
+
+            [Console]::WriteLine("`t Creating drives for $($thisJobVM.Name)")
+            [Console]::WriteLine("`t `t Creating SCM Drives for $($thisJobVM.Name)")
+            $theseSCMDrives | ForEach-Object {
+                $thisDrive = $_
+                0..($theseSCMDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SCMPath\$($thisJobVM.Name)-SCM-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
+
+                #Note: Keep this separate to avoid disk creation race
+                0..($theseSCMDrives.Count - 1) | ForEach-Object {
+                    [Console]::WriteLine("`t Attaching SCM Drive from: $($SCMPath)\$($thisJobVM.Name)-SCM-$_.VHDX")
+                    Add-VMHardDiskDrive -VMName $thisJobVM.Name -Path "$SCMPath\$($thisJobVM.Name)-SCM-$_.VHDX" -ControllerType SCSI -ControllerNumber 1 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
+                }
+            }
+
+            [Console]::WriteLine("`t `t Creating SSD Drives for $($thisJobVM.Name)")
+            $theseSSDDrives | ForEach-Object {
+                $thisDrive = $_
+
+                0..($theseSSDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$SSDPath\$($thisJobVM.Name)-SSD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
+
+                #Note: Keep this separate to avoid disk creation race
+                0..($theseSSDDrives.Count - 1) | ForEach-Object {
+                    [Console]::WriteLine("`t Attaching SSD Drive from: $($SSDPath)\$($thisJobVM.Name)-SSD-$_.VHDX")
+                    Add-VMHardDiskDrive -VMName $thisJobVM.Name -Path "$SSDPath\$($thisJobVM.Name)-SSD-$_.VHDX" -ControllerType SCSI -ControllerNumber 2 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
+                }
+            }
+
+            [Console]::WriteLine("`t `t Creating HDD Drives for $($thisJobVM.Name)")
+            $theseHDDDrives | ForEach-Object {
+                $thisDrive = $_
+
+                0..($theseHDDDrives.Count - 1) | ForEach-Object { New-VHD -Path "$HDDPath\$($thisJobVM.Name)-HDD-$_.VHDX" -Dynamic -SizeBytes $thisDrive.Size -ErrorAction SilentlyContinue -InformationAction SilentlyContinue | Out-Null }
+
+                0..($theseHDDDrives.Count - 1) | ForEach-Object {
+                    [Console]::WriteLine("`t Attaching HDD Drive from: $($HDDPath)\$($thisJobVM.Name)-HDD-$_.VHDX")
+                    Add-VMHardDiskDrive -VMName $thisJobVM.Name -Path "$HDDPath\$($thisJobVM.Name)-HDD-$_.VHDX" -ControllerType SCSI -ControllerNumber 3 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
+                }
+            }
+        }
+    }
+}
+
+Function Set-AzureStackHCIDiskMediaType {
+    #this isn't persisted so it needs to be run each time the system is rebooted.
+    # Create a schtask in the future
+    # Make sure to detec if the disk is actually local because once S2D is enabled, you'll see every disk from each node and rename improperly otherwise.
+
+    $AzureStackHCIVMs | ForEach-Object {
+        $thisVM = $_
+
+        #Note: Due to issue with Set-PhysicalDisk, mediatype/name is reset after a reboot; reset prior to creating cluster
+        $theseSCMDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SCMDrives.Size
+        $theseSSDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives.Size
+        $theseHDDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives.Size
+
+        Write-Host "Setting media type for the disks again. Disks are renamed after a reboot for some reason..."
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            Get-PhysicalDisk | Where-Object Size -eq $using:theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
+                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-PMEM$($_.DeviceID)" -MediaType SCM
+            }
+
+            Get-PhysicalDisk | Where-Object Size -eq $using:theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
+                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-SSD$($_.DeviceID)" -MediaType SSD
+            }
+
+            Get-PhysicalDisk | Where-Object Size -eq $using:theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
+                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-HDD$($_.DeviceID)" -MediaType HDD
+            }
+        }
+    }
+}
+
+Function New-AzureStackHCIVMAdapters {
+
+    <#Note: May not be needed since this will be done while the VMs are on
+    #Note: Start to get a MAC on the vNICs to sort them in the future
+    Reset-AzStackVMs -Start -VMs $AzureStackHCIVMs
+    Reset-AzStackVMs -Stop -VMs  $AzureStackHCIVMs
+    #>
+
+    $AzureStackHCIVMs | ForEach-Object {
+        $thisVM = $_
+        Start-RSJob -Name "$($thisVM.Name)-ConfigureAdapters" -ScriptBlock {
+            $thisJobVM = $using:thisVM
+            $thisJobLabConfig = $using:LabConfig
+
+            [Console]::WriteLine("Creating adapters for $($thisJobVM.Name)")
+            $theseAdapters = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.Adapters
+
+            #Note: There shouldn't be any NICs in the system at this point, so just add however many you in $theseAdapters
+            1..$theseAdapters.Count | Foreach-Object {
+                Add-VMNetworkAdapter -VMName $thisJobVM.Name -SwitchName "$($thisJobLabConfig.Prefix)-$($thisJobLabConfig.SwitchName)*"
+            }
+
+            # Enable Device Naming; attach to the vSwitch; Trunk all possible vlans so that we can set a vlan inside the VM
+            $vmAdapters = Get-VMNetworkAdapter -VMName $thisJobVM.Name | Sort-Object MacAddress
+
+            [Console]::WriteLine("`t Enabling device naming and trunking vlans for vmNICs for: $($thisJobVM.Name)")
+            $vmAdapters | ForEach-Object {
+                Set-VMNetworkAdapter -VMNetworkAdapter $_ -DeviceNaming On
+                Set-VMNetworkAdapterVlan -VMName $thisJobVM.Name -VMNetworkAdapterName $_.Name -Trunk -AllowedVlanIdList 1-4094 -NativeVlanId 0
+            }
+
+            #Separate this section
+            #Note: Naming the first 2 Mgmt for easy ID. This can be updated; just trying to keep it simple
+            [Console]::WriteLine("`t Renaming vmNICs for propagation through to the $($thisJobVM.Name)")
+
+            $AdapterCount = 1
+            foreach ($NIC in ($vmAdapters | Select-Object -First 2)) {
+                Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName "Mgmt0$AdapterCount"
+                $AdapterCount ++
+            }
+
+            $AdapterCount = 0
+            foreach ($NIC in ($vmAdapters | Select-Object -Skip 2)) {
+                if ($AdapterCount -eq 0) { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName 'Ethernet' }
+                Else { Rename-VMNetworkAdapter -VMNetworkAdapter $NIC -NewName "Ethernet $AdapterCount" }
+
+                $AdapterCount ++
+            }
+        }
+    }
+}
