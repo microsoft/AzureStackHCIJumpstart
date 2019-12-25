@@ -139,25 +139,32 @@ Function New-AzureStackHCILabEnvironment {
     Add-LabVirtualMachines
     $global:AllVMs, $global:AzureStackHCIVMs = Get-LabVMs
 
-    # Configure Lab Domain but don't wait for completion
-    $DCName = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
-    $DC     = Get-VM -VMName "$($LabConfig.Prefix)$($DCName.VMName)" -ErrorAction SilentlyContinue
-
     # Start DC only; want this to startup as quickly as possible to begin creating the long running domain
     Write-Host "Starting DC VM"
-    Reset-AzStackVMs -Start -VMs $DC -Wait
 
-    # Now start all other VMs - Don't wait
-    Write-Host "Starting All VMs"
-    Reset-AzStackVMs -Start -VMs $AllVMs
+    $DCName = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
+    $DC     = Get-VM -VMName "$($LabConfig.Prefix)$($DCName.VMName)" -ErrorAction SilentlyContinue
+    Reset-AzStackVMs -Start -VMs $DC -Wait
 
     Write-Host "Configuring DC using DSC takes a while. Please be patient"
     Get-ChildItem "$VMPath\buildData\config" -Recurse -File | ForEach-Object {
         Copy-VMFile -Name $DC.Name -SourcePath $_.FullName -DestinationPath $_.FullName -CreateFullPath -FileSource Host -Force
     }
 
+    # Add sleep to avoid race with script that runs inside guest to rename the system
+    Start-Sleep -Seconds 3
+
+    # Restart DC to complete name change - This is required prior to DC promotion
+    Reset-AzStackVMs -Restart -VMs $DC -Wait
+
     # This runs asynchronously as nothing depends on this being complete at this point
     Assert-LabDomain
+
+    #Note: We've got time on our side here...Domain is being configured and reparenting is occuring which means we can get other stuff done while waiting.
+
+    # Now start all other VMs - Don't wait
+    Write-Host "Starting All VMs"
+    Reset-AzStackVMs -Start -VMs $AllVMs
 
     # Begin long-running reparent task - runs async
     $AllVMs | ForEach-Object {
@@ -183,8 +190,6 @@ Function New-AzureStackHCILabEnvironment {
         } | Out-Null
     }
 
-    #Note: We've got time on our side here...Domain is being configured and reparenting is occuring which means we can get other stuff done while waiting.
-
     # Cleanup VM hardware (S2D disks and NICs) and recreate (later) in case this is not the first run
     [Console]::WriteLine("Cleaning up then re-adding VM hardware in case this is not the first run")
     Remove-AzureStackHCIVMHardware
@@ -194,6 +199,7 @@ Function New-AzureStackHCILabEnvironment {
 
     # Cleanup Ghosts; System must be on but will require a full shutdown (not restart) to complete the removal so don't rename NICs yet.
     #Note: Ignore Loop count as this is the first start. Long startup is likely just sign of slow disks.
+    #Note: Don't open the console until a desktop is seen. On first logon, a bunch of things happen. If you open before that, it won't occur
     Wait-ForHeartbeatState -State On -VMs $AllVMs -IgnoreLoopCount
 
     $AzureStackHCIVMs | ForEach-Object {
@@ -600,3 +606,14 @@ Function Initialize-AzureStackHCILabOrchestration {
 }
 #TODO: Cleanup todos
 #TODO: Test that labconfig is available and not malformed
+#TODO: Support using an existing VHD. Make sure it syspreps and adds the unattend file, etc.
+
+<#TODO:
+only remove disks if they are greater than 4096 KB
+Only remove NICs if list is different than config file?
+
+
+
+Add tests, at least one machine with the role domain controller
+at least 2 machines with the AzureStackHCI role
+#>

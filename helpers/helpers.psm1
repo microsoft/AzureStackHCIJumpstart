@@ -233,12 +233,18 @@ Function New-UnattendFileForVHD {
         </settings>
         <settings pass="oobeSystem">
             <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+                <UserAccounts>
+                    <AdministratorPassword>
+                        <Value>$($LabConfig.AdminPassword)</Value>
+                        <PlainText>true</PlainText>
+                    </AdministratorPassword>
+                </UserAccounts>
                 <AutoLogon>
                     <Password>
                         <Value>$($LabConfig.AdminPassword)</Value>
                         <PlainText>true</PlainText>
                     </Password>
-                    <LogonCount>1</LogonCount>
+                    <LogonCount>2</LogonCount>
                     <Username>Administrator</Username>
                     <Enabled>true</Enabled>
                 </AutoLogon>
@@ -249,12 +255,6 @@ Function New-UnattendFileForVHD {
                         <RequiresUserInput>false</RequiresUserInput>
                     </SynchronousCommand>
                 </FirstLogonCommands>
-                <UserAccounts>
-                    <AdministratorPassword>
-                        <Value>$($LabConfig.AdminPassword)</Value>
-                        <PlainText>true</PlainText>
-                    </AdministratorPassword>
-                </UserAccounts>
                 <OOBE>
                     <HideEULAPage>true</HideEULAPage>
                     <SkipMachineOOBE>true</SkipMachineOOBE>
@@ -340,6 +340,7 @@ Function Initialize-BaseDisk {
     $ReverseDNSrecord = $DHCPscope -replace '^(\d+)\.(\d+)\.\d+\.(\d+)$','$3.$2.$1.in-addr.arpa'
     $DHCPscope = $DHCPscope.Substring(0,$DHCPscope.Length-1)
     $DCIP = ($DHCPscope+'10/24')
+    $GatewayIP = "$($LabConfig.DHCPscope.Substring(0,$LabConfig.DHCPscope.Length-1))1"
 
     #Create DSC configuration
     Configuration DCHydration {
@@ -406,6 +407,12 @@ Function Initialize-BaseDisk {
                 IPAddress = $DCIP
                 AddressFamily = 'IPv4'
                 InterfaceAlias = 'Ethernet'
+            }
+
+            DefaultGatewayAddress DefaultGW {
+                InterfaceAlias = 'Ethernet'
+                AddressFamily = 'IPv4'
+                Address = $GatewayIP
             }
 
             Service DHCPServer {
@@ -475,7 +482,8 @@ Function Initialize-BaseDisk {
         Node 'localhost' {
             Settings {
                 RebootNodeIfNeeded = $true
-                ActionAfterReboot = 'ContinueConfiguration'
+                ActionAfterReboot  = 'ContinueConfiguration'
+                ConfigurationMode  = 'ApplyAndAutoCorrect'
             }
         }
     }
@@ -749,13 +757,6 @@ Function Set-AzureStackHCIDiskMediaType {
 }
 
 Function New-AzureStackHCIVMAdapters {
-
-    <#Note: May not be needed since this will be done while the VMs are on
-    #Note: Start to get a MAC on the vNICs to sort them in the future
-    Reset-AzStackVMs -Start -VMs $AzureStackHCIVMs
-    Reset-AzStackVMs -Stop -VMs  $AzureStackHCIVMs
-    #>
-
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
         Start-RSJob -Name "$($thisVM.Name)-ConfigureAdapters" -ScriptBlock {
