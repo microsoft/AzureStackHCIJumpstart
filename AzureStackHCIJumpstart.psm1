@@ -146,25 +146,69 @@ Function New-AzureStackHCILabEnvironment {
     $DC     = Get-VM -VMName "$($LabConfig.Prefix)$($DCName.VMName)" -ErrorAction SilentlyContinue
     Reset-AzStackVMs -Start -VMs $DC -Wait
 
-    Write-Host "Configuring DC using DSC takes a while. Please be patient"
-    Get-ChildItem "$VMPath\buildData\config" -Recurse -File | ForEach-Object {
-        Copy-VMFile -Name $DC.Name -SourcePath $_.FullName -DestinationPath $_.FullName -CreateFullPath -FileSource Host -Force
-    }
+    #Note: Unattend file renames the VM on first startup; now we need to ensure that the machine has been rebooted prior to beginning DC Promotion
+    Write-Host 'Renaming Host and Prepping for DC Promotion'
 
-    # Add sleep to avoid race with script that runs inside guest to rename the system
-    Start-Sleep -Seconds 3
+    do {
+        Get-ChildItem "$VMPath\buildData\config" -Recurse -File | ForEach-Object {
+            Copy-VMFile -Name $DC.Name -SourcePath $_.FullName -DestinationPath $_.FullName -CreateFullPath -FileSource Host -Force
+        }
 
-    # Restart DC to complete name change - This is required prior to DC promotion
-    Reset-AzStackVMs -Restart -VMs $DC -Wait
+        Remove-Variable BuildDataExists, RebootIsNeeded -ErrorAction SilentlyContinue
+        $BuildDataExists, $RebootIsNeeded = Invoke-Command -VMName $DC.Name -Credential $localCred -ScriptBlock {
+            $metaConfig = Test-Path C:\DataStore\VMs\buildData\config\localhost.mof -ErrorAction SilentlyContinue
+            $DCConfig   = Test-Path C:\DataStore\VMs\buildData\config\localhost.meta.mof -ErrorAction SilentlyContinue
+            $BuildDataExists = $metaConfig -and $DCConfig
+
+            #Note: ActiveName will display the computer name before a reboot; ComputerName is the name it will be after a reboot; VMName is the name of the vm in Hyper-V
+            #      Goal of this is to detect if the machine needs a reboot to apply the name change, which needs to be done before DC Promotion
+            #      First test that the unattend has completed the host rename and sleep a bit to give it time
+            $ActiveName     = (Get-Itemproperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName' -ErrorAction SilentlyContinue).ComputerName
+            $ComputerName   = (Get-Itemproperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName' -ErrorAction SilentlyContinue).ComputerName
+            $VMName         = (Get-Itemproperty 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters' -ErrorAction SilentlyContinue).VirtualMachineName
+
+            While ($VMName -ne $ComputerName) { Start-Sleep -Seconds 3 }
+
+            $RebootIsNeeded = $ActiveName -ne $ComputerName
+            Return $BuildDataExists, $RebootIsNeeded
+        }
+
+        [Console]::WriteLine("`t Reboot is needed: $RebootIsNeeded")
+        if ($RebootIsNeeded) {
+            Reset-AzStackVMs -VMs $DC -Restart -Wait
+        }
+    } Until (($BuildDataExists -eq $true) -and ($RebootIsNeeded -eq $false))
 
     # This runs asynchronously as nothing depends on this being complete at this point
+    Write-Host "`t Configuring Domain Controller takes a while. Please be patient"
     Assert-LabDomain
 
     #Note: We've got time on our side here...Domain is being configured and reparenting is occuring which means we can get other stuff done while waiting.
+    # Now start all other VMs - Don't wait for completion, but stagger startup for hosts with slow disks if the OSD is the default size (4096KB) indicating it's not started before.
+    Write-Host "Starting All VMs - Will stagger if this is first startup"
 
-    # Now start all other VMs - Don't wait
-    Write-Host "Starting All VMs"
-    Reset-AzStackVMs -Start -VMs $AllVMs
+    $VMCounter = 0
+    $AllVMs.Where{ $_.Role -ne 'Domain Controller' } | Foreach-Object {
+        $thisVM = $_
+        $VMCounter ++
+
+        <# Get OSD VHD file length. If greater than specified size (default size is 4MB) then machine has started up previously and we can start the next VM
+            If this is the first startup, this delay will let each individual VM startup faster since there will likely be less disk churn
+            In testing this allowed startup to occur much more rapidly and on low memory machines, allows dynamic memory to reclaim memory #>
+
+        #Note: Don't open the console until a desktop is seen. On first logon, a bunch of things happen. If you open before that, it won't occur
+        Write-host "`t Starting VM $($thisVM.Name)"
+        Reset-AzStackVMs -Start -VMs $thisVM
+
+        # If there are only 2 VMs left to start, just keep going...no more delays, get on with it.
+        If (($VMCounter - 2) -lt $AllVMs.Count) {
+            $thisVMOSDLength = 4MB
+            While ($thisVMOSDLength -le 750MB) {
+                $thisVMOSDLength = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Length
+                Start-Sleep -Seconds 5
+            }
+        }
+    }
 
     # Begin long-running reparent task - runs async
     $AllVMs | ForEach-Object {
@@ -198,9 +242,7 @@ Function New-AzureStackHCILabEnvironment {
     New-AzureStackHCIVMAdapters
 
     # Cleanup Ghosts; System must be on but will require a full shutdown (not restart) to complete the removal so don't rename NICs yet.
-    #Note: Ignore Loop count as this is the first start. Long startup is likely just sign of slow disks.
-    #Note: Don't open the console until a desktop is seen. On first logon, a bunch of things happen. If you open before that, it won't occur
-    Wait-ForHeartbeatState -State On -VMs $AllVMs -IgnoreLoopCount
+    Wait-ForHeartbeatState -State On -VMs $AllVMs
 
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
@@ -226,6 +268,11 @@ Function New-AzureStackHCILabEnvironment {
 
         Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
             if (-not (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain) {
+                # Make sure you get an IP now that DHCP has been configured
+                ipconfig /release | Out-Null
+                ipconfig /renew   | Out-Null
+
+                # Join computer to domain
                 $thisDomain = $($using:LabConfig.DomainNetbiosName)
                 Add-Computer -DomainName $thisDomain -LocalCredential $Using:localCred -Credential $Using:VMCred -Force -WarningAction SilentlyContinue
             }

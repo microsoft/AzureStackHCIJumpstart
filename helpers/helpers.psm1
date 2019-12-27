@@ -489,7 +489,7 @@ Function Initialize-BaseDisk {
     }
 
     #create DSC MOF files
-    Write-Host "`t Creating DSC Configs for DC"
+    Write-Host "`t Creating Domain Controller configuration"
     LCMConfig   -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -InformationAction SilentlyContinue | Out-Null
 
     #TODO: Got to here last night
@@ -563,19 +563,17 @@ Function Get-LabVMs {
 }
 
 Function Assert-LabDomain {
-    $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' } | Foreach-Object {
-        $DCName = "$($LabConfig.Prefix)$($_.VMName)"
-    }
+    $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' } | Foreach-Object { $DCName = "$($LabConfig.Prefix)$($_.VMName)" }
 
     # Use local cred
     Invoke-Command -VMName $DCName -Credential $localCred -ScriptBlock {
-        $InitialStatus = Get-DscConfigurationStatus -ErrorAction SilentlyContinue
-        $LCM           = Get-DSCLocalConfigurationManager -ErrorAction SilentlyContinue
+        #$InitialStatus = Get-DscConfigurationStatus -ErrorAction SilentlyContinue
+        #$LCM           = Get-DSCLocalConfigurationManager -ErrorAction SilentlyContinue
 
-        if ($InitialStatus -eq $null -and $LCM.LCMState -eq 'Idle' ) {
+        #if ($InitialStatus -eq $null -and $LCM.LCMState -eq 'Idle' ) {
             Set-DscLocalConfigurationManager -Path "$($using:VMPath)\buildData\config"          -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
             Start-DscConfiguration           -Path "$($using:VMPath)\buildData\config" -Verbose -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
-        }
+        #}
     }
 }
 
