@@ -127,6 +127,7 @@ Function New-AzureStackHCILabEnvironment {
     if (-not ($labConfig)) { $global:LabConfig = Get-LabConfig }
 #endregion
 
+#region BaseDisk and VM Creation
     # Hydrate base disk - this is long and painful...
     New-BaseDisk
 
@@ -138,7 +139,9 @@ Function New-AzureStackHCILabEnvironment {
     # Create Virtual Machines
     Add-LabVirtualMachines
     $global:AllVMs, $global:AzureStackHCIVMs = Get-LabVMs
+#endregion
 
+#region VM Startup
     # Start DC only; want this to startup as quickly as possible to begin creating the long running domain
     Write-Host "Starting DC VM"
 
@@ -178,7 +181,9 @@ Function New-AzureStackHCILabEnvironment {
             Reset-AzStackVMs -VMs $DC -Restart -Wait
         }
     } Until (($BuildDataExists -eq $true) -and ($RebootIsNeeded -eq $false))
+#endregion
 
+#region Domain Creation and VM online customization
     # This runs asynchronously as nothing depends on this being complete at this point
     Write-Host "`t Configuring Domain Controller takes a while. Please be patient"
     Assert-LabDomain
@@ -285,7 +290,9 @@ Function New-AzureStackHCILabEnvironment {
     # Make sure all previous jobs have completed
     Get-RSJob | Wait-RSJob
     Get-RSJob | Remove-RSJob
+#endregion
 
+#region Offline VM configuration
     Write-Host 'Shutting down VMs for OSD Merge'
     Reset-AzStackVMs -Shutdown -VMs $AllVMs -Wait
 
@@ -320,12 +327,16 @@ Function New-AzureStackHCILabEnvironment {
 
     Get-RSJob | Wait-RSJob
     Get-RSJob | Remove-RSJob
+#endregion
 
+#region In-guest customization
     # Once merged, start VMs, then continue configuration inside the guest.
     # Previous tasks needed the shutdown/reboot anyway e.g. domain join and ghost NIC removal
 
     Reset-AzStackVMs -Start -VMs $AllVMs -Wait
 
+    #TODO: This is a monstrosity and needs to be moved to helpers...
+    #TODO: Also update this to allow labconfig to specify
     # Rename Adapters inside guest
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
@@ -403,152 +414,25 @@ Function New-AzureStackHCILabEnvironment {
                 }
             }
         }
-    }
 
-    Write-Host 'Completed Environment Setup'
+        # Set VHD Media Type inside guest
+        Set-AzureStackHCIDiskMediaType
+    }
+#endregion
+
+    Write-Host '\\\ Completed Environment Setup  ///'
+    Write-Host '/// Starting checkpoint creation \\\'
+
+    #Note: Snapshots creation and restoration are labelled by what's done,
+    #      e.g. Stage 1 snapshot = all features are installed; stage 3 = cluster is created
+
+    # Create Default and Stage 1 Snapshots
+    New-AzureStackHCIStageSnapshot -Stage 0, 1
+
+    Restore-AzureStackHCIStageSnapshot -Stage 0
 
     if ($ranOOB) {
         Write-Host "`t Since this was run without orchestration, you may still need to customize using Invoke-AzureStackHCILabVMCustomization"
-        $EndTime = Get-Date
-        "Start Time: $StartTime"
-        "End Time: $EndTime"
-    }
-}
-
-Function Invoke-AzureStackHCILabVMCustomization {
-#region In case orchestration was not run
-    if (-not ($here)) {
-        $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
-        if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
-
-        $StartTime = Get-Date
-        $ranOOB = $true
-
-        $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
-    }
-
-    if (-not (Get-Module -Name helpers)) {
-        $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
-        Import-Module $helperPath -Force
-    }
-
-    if (-not ($labConfig)) { $global:LabConfig = Get-LabConfig }
-#endregion
-
-    # Check that the environment is good to go e.g. in case New-AzureStackHCILabEnvironment wasn't called
-    Approve-AzureStackHCILabState -Test Lab
-
-    # Stage testing and checkpoints
-    $AllVMs | ForEach-Object {
-        $thisVM = $_
-        Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints" -ScriptBlock {
-            $thisJobVM = $using:thisVM
-
-            [Console]::WriteLine("Verifying Starting checkpoint exists for: $($thisJobVM.Name)")
-            While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
-                [Console]::WriteLine("`t Creating starting checkpoint for: $($thisJobVM.Name)")
-                Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Start'
-            }
-        } | Out-Null
-    }
-
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
-
-    $AzureStackHCIVMs | ForEach-Object {
-        $thisVM = $_
-        Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
-            $thisJobVM = $using:thisVM
-
-            [Console]::WriteLine("Checking and/or Installing Stage 1 Features for: $($thisJobVM.Name)")
-            Invoke-Command -VMName $thisJobVM.Name -Credential $using:VMCred -ScriptBlock {
-                Install-WindowsFeature -Name 'Bitlocker', 'Data-Center-Bridging', 'Failover-Clustering', 'FS-Data-Deduplication', 'Hyper-V', 'RSAT-AD-PowerShell' -IncludeManagementTools
-            }
-        } | Out-Null
-    }
-
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
-
-    #Note: Reboot to complete the installations, then wait again in case multiple reboots occur. Do sequential
-    Write-Host "Restarting VMs following feature installation for stage 1 checkpoint"
-    Reset-AzStackVMs -Restart -Wait -VMs $AzureStackHCIVMs
-    Wait-ForHeartbeatState -State On -VMs $AzureStackHCIVMs
-
-    # Reset Media Type following reboot
-    Set-AzureStackHCIDiskMediaType
-
-    $AzureStackHCIVMs | ForEach-Object {
-        $thisVM = $_
-        Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
-            $thisJobVM = $using:thisVM
-
-            [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisVM.Name)")
-            While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete')) {
-                [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
-                Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
-            }
-        }
-    }
-
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
-
-    # Do Stage 3 separately because we need all servers to be up and this run from one of the nodes
-    $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
-        $thisVM = $_
-
-        [Console]::WriteLine("`t Preping Stage 3 - Clustering")
-        [Console]::WriteLine("`t `t Running Test Cluster on: $($thisVM.Name)")
-        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock { Test-Cluster -Node $($Using:AzureStackHCIVMs.Name) -WarningAction SilentlyContinue | Out-Null }
-
-        $DomainController = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
-        $DCName = "$($LabConfig.Prefix)$($DomainController.VMName)"
-        $CNOExists = Invoke-Command -VMName $DCName -Credential $VMCred -ScriptBlock {
-            #Note: Have to try/catch because remove-adcomputer won't shutup even with erroraction silentlycontinue
-            try { Remove-ADComputer -Identity "$($using:LabConfig.Prefix)" -Confirm:$false }
-            catch { [Console]::WriteLine("`t `t CNO was not found. Continuing with cluster creation)") }
-        }
-
-        if ($CNOExists) { Write-Host "AzStackHCI Computer account still exists - this should occur but the Cluster won't be able to be created...troubleshoot the removal of the account" }
-        Else {
-            Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-                #Note: Once Stage 2 is configured with separate L3 adapters, you may have to come back here and ignore networks for the CAP to be built on
-                New-Cluster -Name "$($using:LabConfig.Prefix)" -Node $($Using:AzureStackHCIVMs.Name) -Force | Out-Null
-            }
-        }
-    }
-
-    # Need the DC now that there is an AD Object
-    $AllVMs | ForEach-Object {
-        $thisVM = $_
-        Start-RSJob -Name "Stage 3 Checkpoint for: $($thisVM.Name)" -ScriptBlock {
-            $thisJobVM = $using:thisVM
-
-            [Console]::WriteLine("`t Creating Stage 3 checkpoint")
-            While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 3 Complete')) {
-                Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 3 Complete'
-            }
-        }
-    }
-
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
-
-    # Apply Starting Checkpoint
-    $AzureStackHCIVMs | ForEach-Object {
-        Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints" -ScriptBlock {
-            $thisJobVM = $using:thisVM
-
-            [Console]::WriteLine("Applying starting checkpoint for: $($thisJobVM.Name)")
-            Restore-VMSnapshot -Name Start -VMName $thisJobVM.Name -Confirm:$false
-        } | Out-Null
-    }
-
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
-
-    if ($ranOOB) {
         $EndTime = Get-Date
         "Start Time: $StartTime"
         "End Time: $EndTime"
