@@ -107,25 +107,92 @@ Function Remove-AzureStackHCILabEnvironment {
     Write-Host 'Clean is finished...Exiting'
 }
 
-Function New-AzureStackHCILabEnvironment {
-#region In case orchestration was not run
-    if (-not ($here)) {
-        $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
-        if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+Function Initialize-AzureStackHCILabOrchestration {
+<#
+    .SYNOPSIS
+        Run this to orchestrate the entire setup of the Azure Stack HCI lab environment
 
-        $StartTime = Get-Date
-        $ranOOB = $true
+    .DESCRIPTION
+        This module will help you deploy the Azure Stack HCI lab environment. This is not intended for production deployments.
 
-        $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+        This script will:
+        - Deploy the lab environment VMs
+        - Create the AD Domain
+        - Create additional VMs for Azure Stack HCI and Windows Admin Center
+        - Configure the VMs
+
+        Note: This function only calls exported functions
+
+    .PARAMETER LabDomainName
+        This is the domain name for the lab environment (will be created)
+
+    .PARAMETER LabAdmin
+        The domain admin username for the LabDomainName domain
+
+    .PARAMETER LabPassword
+        The plaintext password to be used for the LabAdmin account
+
+    .PARAMETER HostVMSwitchName
+        The name of the host virtual switch to attach lab VMs to
+
+    .EXAMPLE
+        TODO: Create Example
+
+    .NOTES
+        Author: Microsoft Azure Stack HCI vTeam
+
+        Please file issues on GitHub @ GitHub.com/Microsoft/AzureStackHCIJumpstart
+
+    .LINK
+        More projects : https://aka.ms/HCI-Deployment
+        Email Address : TODO
+#>
+
+    $StartTime = Get-Date
+    Clear-Host
+
+    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+    if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+
+    $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+    Write-Host "Azure Stack HCI Jumpstart module is running from: $here"
+
+    #Note: These are required until this entire package is published in the PoSH gallery. Once completed, requiredmodules will be used in the manifest.
+    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
+        Get-Module -Name $_.Name | Remove-Module -Force -ErrorAction SilentlyContinue
     }
 
-    if (-not (Get-Module -Name helpers)) {
-        $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
-        Import-Module $helperPath -Force
+#region Temporary until; added to posh gallery
+    Write-Host "Importing Modules from: $here\helpers"
+    Copy-Item -Path "$here\helpers\ModulesTillPublishedonGallery\PoshRSJob" -Recurse -Destination "C:\Program Files\WindowsPowerShell\Modules\PoshRSJob" -Container -ErrorAction SilentlyContinue | Out-Null
+    Import-Module -Name PoshRSJob -Force -Global -ErrorAction SilentlyContinue
+
+    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" -Exclude PoshRSJob | foreach-Object {
+        $thisModule = $_
+        $path = $_.FullName
+        $destPath = "C:\Program Files\WindowsPowerShell\Modules\$_"
+
+        Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {
+            Copy-Item -Path $using:path -Recurse -Destination $using:destPath -Container -Force -ErrorAction SilentlyContinue
+        } | Out-Null
+
+        Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
     }
 
-    if (-not ($labConfig)) { $global:LabConfig = Get-LabConfig }
+    Get-RSJob | Wait-RSJob
+    Get-RSJob | Remove-RSJob
 #endregion
+
+    $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
+    Import-Module $helperPath -Force
+
+    $global:LabConfig = Get-LabConfig
+
+    # Check that the host is ready with approve host state
+    Approve-AzureStackHCILabState -Test Host
+
+    # Initialize lab environment
+    New-AzureStackHCILabEnvironment
 
 #region BaseDisk and VM Creation
     # Hydrate base disk - this is long and painful...
@@ -151,35 +218,48 @@ Function New-AzureStackHCILabEnvironment {
 
     #Note: Unattend file renames the VM on first startup; now we need to ensure that the machine has been rebooted prior to beginning DC Promotion
     Write-Host 'Renaming Host and Prepping for DC Promotion'
+    Register-AzureStackHCIStartupTasks -VMs $DC
+
+    Invoke-Command -VMName $DC.Name -Credential $localCred -ScriptBlock {
+        Start-ScheduledTask -TaskName 'Azure Stack HCI Startup settings'
+    }
 
     do {
         Get-ChildItem "$VMPath\buildData\config" -Recurse -File | ForEach-Object {
             Copy-VMFile -Name $DC.Name -SourcePath $_.FullName -DestinationPath $_.FullName -CreateFullPath -FileSource Host -Force
         }
 
+        [Console]::WriteLine("`t Checking if reboot is needed due to hostname change prior to DC Promotion")
         Remove-Variable BuildDataExists, RebootIsNeeded -ErrorAction SilentlyContinue
+
         $BuildDataExists, $RebootIsNeeded = Invoke-Command -VMName $DC.Name -Credential $localCred -ScriptBlock {
+            $VerbosePreference = 'Continue'
+            $thisDC = $using:DC
+
             $metaConfig = Test-Path C:\DataStore\VMs\buildData\config\localhost.mof -ErrorAction SilentlyContinue
             $DCConfig   = Test-Path C:\DataStore\VMs\buildData\config\localhost.meta.mof -ErrorAction SilentlyContinue
             $BuildDataExists = $metaConfig -and $DCConfig
 
-            #Note: ActiveName will display the computer name before a reboot; ComputerName is the name it will be after a reboot; VMName is the name of the vm in Hyper-V
-            #      Goal of this is to detect if the machine needs a reboot to apply the name change, which needs to be done before DC Promotion
-            #      First test that the unattend has completed the host rename and sleep a bit to give it time
-            $ActiveName     = (Get-Itemproperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName' -ErrorAction SilentlyContinue).ComputerName
-            $ComputerName   = (Get-Itemproperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName' -ErrorAction SilentlyContinue).ComputerName
-            $VMName         = (Get-Itemproperty 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters' -ErrorAction SilentlyContinue).VirtualMachineName
+            do {
+                Rename-Computer -NewName $thisDC.Name -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+                #Note: ActiveName will display the computer name before a reboot; ComputerName is the name it will be after a reboot; VMName is the name of the vm in Hyper-V
+                #      Goal of this is to detect if the machine needs a reboot to apply the name change, which needs to be done before DC Promotion
+                #      We loop to give the startup script/rename process a few seconds to complete
+                $ActiveName     = (Get-Itemproperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName' -ErrorAction SilentlyContinue).ComputerName
+                $ComputerName   = (Get-Itemproperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName' -ErrorAction SilentlyContinue).ComputerName
+                $VMName         = (Get-Itemproperty 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters' -ErrorAction SilentlyContinue).VirtualMachineName
 
-            While ($VMName -ne $ComputerName) { Start-Sleep -Seconds 3 }
+                # If we couldn't get values from VMName or Computername, assign an arbitrary value to VMName so this evaluates as false and repeats the loop
+                if ($VMName -eq $null -or $ComputerName -eq $Null) { $VMName = (New-Guid).Guid }
+            } until ($VMName -eq $ComputerName)
 
+            Write-Verbose "RebootNeeded = ($ActiveName -ne $ComputerName)"
             $RebootIsNeeded = $ActiveName -ne $ComputerName
             Return $BuildDataExists, $RebootIsNeeded
         }
 
         [Console]::WriteLine("`t Reboot is needed: $RebootIsNeeded")
-        if ($RebootIsNeeded) {
-            Reset-AzStackVMs -VMs $DC -Restart -Wait
-        }
+        if ($RebootIsNeeded) { Reset-AzStackVMs -VMs $DC -Restart -Wait }
     } Until (($BuildDataExists -eq $true) -and ($RebootIsNeeded -eq $false))
 #endregion
 
@@ -248,6 +328,7 @@ Function New-AzureStackHCILabEnvironment {
 
     # Cleanup Ghosts; System must be on but will require a full shutdown (not restart) to complete the removal so don't rename NICs yet.
     Wait-ForHeartbeatState -State On -VMs $AllVMs
+    Register-AzureStackHCIStartupTasks -VMs $AllVMs.Where{$_.Name -ne $DC.Name}
 
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
@@ -258,7 +339,6 @@ Function New-AzureStackHCILabEnvironment {
 
             ForEach ($ghost in $ghosts) {
                 $RemoveKey = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($ghost.InstanceId)"
-                # $VerbosePreference = 'continue' - Use for testing
                 Get-Item $RemoveKey | Select-Object -ExpandProperty Property | Foreach-Object { Remove-ItemProperty -Path $RemoveKey -Name $_ }
             }
         }
@@ -279,7 +359,7 @@ Function New-AzureStackHCILabEnvironment {
 
                 # Join computer to domain
                 $thisDomain = $($using:LabConfig.DomainNetbiosName)
-                Add-Computer -DomainName $thisDomain -LocalCredential $Using:localCred -Credential $Using:VMCred -Force -WarningAction SilentlyContinue
+                Add-Computer -NewName $using:thisSystem -DomainName $thisDomain -LocalCredential $Using:localCred -Credential $Using:VMCred -Force -WarningAction SilentlyContinue
             }
 
             Get-NetFirewallRule -DisplayName "*File and Printer Sharing (Echo Request*In)" | Enable-NetFirewallRule
@@ -335,89 +415,7 @@ Function New-AzureStackHCILabEnvironment {
 
     Reset-AzStackVMs -Start -VMs $AllVMs -Wait
 
-    #TODO: This is a monstrosity and needs to be moved to helpers...
-    #TODO: Also update this to allow labconfig to specify
-    # Rename Adapters inside guest
-    $AzureStackHCIVMs | ForEach-Object {
-        $thisVM = $_
-
-        Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
-        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-            #$VerbosePreference = 'continue' - Use for testing
-            $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
-            Foreach ($vNIC in $RenameVMNic) {
-                #Note: Temp rename to avoid conflicts e.g. Ethernet should be adapter1 but is adapter2; renaming adapter2 first is necessary
-                $Guid = $(((New-Guid).Guid).Substring(0,15))
-                Rename-NetAdapter -Name $vNIC.Name -NewName $Guid
-            }
-
-            $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
-            Foreach ($vmNIC in $RenameVMNic) { Rename-NetAdapter -Name $vmNIC.Name -NewName "$($vmNIC.DisplayValue)" }
-        }
-
-        Write-Host "Modifying Interface Description to replicate real NICs in guest: $($thisVM.Name)"
-        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-            $interfaces = Get-NetAdapter | Sort-Object MacAddress
-
-            foreach ($interface in $interfaces) {
-                Switch -Wildcard ($interface.Name) {
-                    'Mgmt01' {
-                        Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                            $psPath = $_.PSPath
-                            $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
-                                                    Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
-
-                            if ($friendlyPath -ne $null) {
-                                Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC'
-                            }
-                        }
-
-                        Set-DnsClient -InterfaceAlias $interface.Name  -RegisterThisConnectionsAddress $true
-                    }
-
-                    'Mgmt02' {
-                        Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                            $psPath = $_.PSPath
-                            $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
-                                                Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
-
-                            if ($friendlyPath -ne $null) {
-                                Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC #2'
-                            }
-
-                            Set-DnsClient -InterfaceAlias $interface.Name  -RegisterThisConnectionsAddress $true
-                        }
-                    }
-
-                    'Ethernet*' {
-                        Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                            $psPath = $_.PSPath
-                            $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
-                                                Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
-
-                            if ($friendlyPath -ne $null) {
-                                $intNum = $(($interface.Name -split ' ')[1])
-
-                                if ($intNum -eq $null) {
-                                    Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262"
-                                }
-                                Else {
-                                    Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262 #$intNum"
-                                }
-
-                                $intNum = $null
-                            }
-                        }
-
-                        Set-DnsClient -InterfaceAlias $interface.Name  -RegisterThisConnectionsAddress $false
-                    }
-                }
-            }
-        }
-
-        # Set VHD Media Type inside guest
-        Set-AzureStackHCIDiskMediaType
-    }
+    Set-AzureStackHCIVMAdapters
 #endregion
 
     Write-Host '\\\ Completed Environment Setup  ///'
@@ -431,120 +429,30 @@ Function New-AzureStackHCILabEnvironment {
 
     Restore-AzureStackHCIStageSnapshot -Stage 0
 
-    if ($ranOOB) {
-        Write-Host "`t Since this was run without orchestration, you may still need to customize using Invoke-AzureStackHCILabVMCustomization"
-        $EndTime = Get-Date
-        "Start Time: $StartTime"
-        "End Time: $EndTime"
-    }
-}
 
-Function Initialize-AzureStackHCILabOrchestration {
-<#
-    .SYNOPSIS
-        Run this to orchestrate the entire setup of the Azure Stack HCI lab environment
 
-    .DESCRIPTION
-        This module will help you deploy the Azure Stack HCI lab environment. This is not intended for production deployments.
 
-        This script will:
-        - Deploy the lab environment VMs
-        - Create the AD Domain
-        - Create additional VMs for Azure Stack HCI and Windows Admin Center
-        - Configure the VMs
 
-        Note: This function only calls exported functions
 
-    .PARAMETER LabDomainName
-        This is the domain name for the lab environment (will be created)
 
-    .PARAMETER LabAdmin
-        The domain admin username for the LabDomainName domain
 
-    .PARAMETER LabPassword
-        The plaintext password to be used for the LabAdmin account
 
-    .PARAMETER HostVMSwitchName
-        The name of the host virtual switch to attach lab VMs to
 
-    .EXAMPLE
-        TODO: Create Example
-
-    .NOTES
-        Author: Microsoft Azure Stack HCI vTeam
-
-        Please file issues on GitHub @ GitHub.com/Microsoft/AzureStackHCIJumpstart
-
-    .LINK
-        More projects : https://aka.ms/HCI-Deployment
-        Email Address : TODO
-#>
-
-    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
-    if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
-
-    $StartTime = Get-Date
-
-    Clear-Host
-
-    $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
-    Write-Host "Azure Stack HCI Jumpstart module is running from: $here"
-
-    #Note: These are required until this entire package is published in the PoSH gallery. Once completed, requiredmodules will be used in the manifest.
-    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
-        Get-Module -Name $_.Name | Remove-Module -Force -ErrorAction SilentlyContinue
-    }
-
-    Write-Host "Importing Modules from: $here\helpers"
-#region Temporary unti; added to posh gallery
-    Copy-Item -Path "$here\helpers\ModulesTillPublishedonGallery\PoshRSJob" -Recurse -Destination "C:\Program Files\WindowsPowerShell\Modules\PoshRSJob" -Container -ErrorAction SilentlyContinue | Out-Null
-    Import-Module -Name PoshRSJob -Force -Global -ErrorAction SilentlyContinue
-
-    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" -Exclude PoshRSJob | foreach-Object {
-        $thisModule = $_
-        $path = $_.FullName
-        $destPath = "C:\Program Files\WindowsPowerShell\Modules\$_"
-
-        Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {
-            Copy-Item -Path $using:path -Recurse -Destination $using:destPath -Container -Force -ErrorAction SilentlyContinue
-        } | Out-Null
-
-        Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
-    }
-
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
-#endregion
-
-    $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
-    Import-Module $helperPath -Force
-
-    $global:LabConfig = Get-LabConfig
-
-# Check that the host is ready with approve host state
-    Approve-AzureStackHCILabState -Test Host
-
-    # Initialize lab environment
-    New-AzureStackHCILabEnvironment
-
-# Invoke VMs with appropriate configurations
-    #Invoke-AzureStackHCILabVMCustomization
 
     $EndTime = Get-Date
 
     "Start Time: $StartTime"
     "End Time: $EndTime"
 }
-#TODO: Cleanup todos
-#TODO: Test that labconfig is available and not malformed
-#TODO: Support using an existing VHD. Make sure it syspreps and adds the unattend file, etc.
 
 <#TODO:
-only remove disks if they are greater than 4096 KB
-Only remove NICs if list is different than config file?
+- Cleanup todos
+- Test that labconfig is available and not malformed
+- Support using an existing VHD. Make sure it syspreps and adds the unattend file, etc.
 
+- only remove disks if they are greater than 4096 KB
+- Only remove NICs if list is different than config file?
 
-
-Add tests, at least one machine with the role domain controller
-at least 2 machines with the AzureStackHCI role
+- Add tests, at least one machine with the role domain controller
+- at least 2 machines with the AzureStackHCI role
 #>

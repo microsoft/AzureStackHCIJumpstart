@@ -186,8 +186,8 @@ Function New-BaseDisk {
     $ISODriveLetter = "$((Get-Volume -DiskImage $MountedISO -InformationAction SilentlyContinue).DriveLetter):"
     $BuildNumber    = (Get-ItemProperty -Path (Join-Path -Path $ISODriveLetter -ChildPath "setup.exe") -InformationAction SilentlyContinue).VersionInfo.FileBuildPart
     $WindowsImage   = Get-WindowsImage -ImagePath (Join-Path -Path $ISODriveLetter -ChildPath "sources\install.wim") -InformationAction SilentlyContinue
-    $Edition = ($WindowsImage | Where-Object ImageName -like *Server*2019*Datacenter*Desktop*).ImageName
-    $vhdname = "BaseDisk_$BuildNumber.vhdx"
+    $Edition        = ($WindowsImage | Where-Object ImageName -like *Server*2019*Datacenter*Desktop*).ImageName
+    $vhdname        = "BaseDisk_$BuildNumber.vhdx"
     $global:VHDPath = "$VMPath\$vhdname"
 
     Write-Host "`t The ISO provided contains build number: $BuildNumber"
@@ -236,22 +236,6 @@ Function New-UnattendFileForVHD {
                         <PlainText>true</PlainText>
                     </AdministratorPassword>
                 </UserAccounts>
-                <AutoLogon>
-                    <Password>
-                        <Value>$($LabConfig.AdminPassword)</Value>
-                        <PlainText>true</PlainText>
-                    </Password>
-                    <LogonCount>2</LogonCount>
-                    <Username>Administrator</Username>
-                    <Enabled>true</Enabled>
-                </AutoLogon>
-                <FirstLogonCommands>
-                    <SynchronousCommand wcm:action="add">
-                        <CommandLine>C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -ExecutionPolicy bypass -File C:\FirstLogon.ps1</CommandLine>
-                        <Order>1</Order>
-                        <RequiresUserInput>false</RequiresUserInput>
-                    </SynchronousCommand>
-                </FirstLogonCommands>
                 <OOBE>
                     <HideEULAPage>true</HideEULAPage>
                     <SkipMachineOOBE>true</SkipMachineOOBE>
@@ -318,8 +302,6 @@ Function Initialize-BaseDisk {
 
                 Copy-Item -Path $unattendfile -Destination "$MountPath\Windows\Panther\unattend.xml" -Force
             }
-
-            Copy-Item -Path "$here\helpers\FirstLogon.ps1" -Destination "$MountPath\FirstLogon.ps1" -Force -ErrorAction SilentlyContinue
         }
         Else { Write-Host "`t $VHDPath could not be mounted but was found (likely in use)" }
     }
@@ -737,7 +719,7 @@ Function Set-AzureStackHCIDiskMediaType {
         $theseSSDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives.Size
         $theseHDDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives.Size
 
-        Write-Host "Setting media type for the disks again. Disks are renamed after a reboot for some reason..."
+        Write-Host "Setting media type for the disks again."
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
             Get-PhysicalDisk | Where-Object Size -eq $using:theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
                 Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-PMEM$($_.DeviceID)" -MediaType SCM
@@ -800,6 +782,89 @@ Function New-AzureStackHCIVMAdapters {
 
     Get-RSJob | Where-Object Name -like "*-ConfigureAdapters" | Wait-RSJob | Out-Null
 }
+
+Function Set-AzureStackHCIVMAdapters {
+        #TODO: This is a monstrosity and needs to be moved to helpers...
+    #TODO: Also update this to allow labconfig to specify
+    # Rename Adapters inside guest
+    $AzureStackHCIVMs | ForEach-Object {
+        $thisVM = $_
+
+        Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            #$VerbosePreference = 'continue' - Use for testing
+            $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
+            Foreach ($vNIC in $RenameVMNic) {
+                #Note: Temp rename to avoid conflicts e.g. Ethernet should be adapter1 but is adapter2; renaming adapter2 first is necessary
+                $Guid = $(((New-Guid).Guid).Substring(0,15))
+                Rename-NetAdapter -Name $vNIC.Name -NewName $Guid
+            }
+
+            $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"
+            Foreach ($vmNIC in $RenameVMNic) { Rename-NetAdapter -Name $vmNIC.Name -NewName "$($vmNIC.DisplayValue)" }
+        }
+
+        Write-Host "Modifying Interface Description to replicate real NICs in guest: $($thisVM.Name)"
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            $interfaces = Get-NetAdapter | Sort-Object MacAddress
+
+            foreach ($interface in $interfaces) {
+                Switch -Wildcard ($interface.Name) {
+                    'Mgmt01' {
+                        Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                            $psPath = $_.PSPath
+                            $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
+                                                    Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
+
+                            if ($friendlyPath -ne $null) {
+                                Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC'
+                            }
+                        }
+
+                        Set-DnsClient -InterfaceAlias $interface.Name  -RegisterThisConnectionsAddress $true
+                    }
+
+                    'Mgmt02' {
+                        Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                            $psPath = $_.PSPath
+                            $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
+                                                Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
+
+                            if ($friendlyPath -ne $null) {
+                                Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value 'Intel(R) Gigabit I350-t rNDC #2'
+                            }
+
+                            Set-DnsClient -InterfaceAlias $interface.Name  -RegisterThisConnectionsAddress $true
+                        }
+                    }
+
+                    'Ethernet*' {
+                        Get-ChildItem -Path 'HKLM:\SYSTEM\ControlSet001\Enum\VMBUS' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                            $psPath = $_.PSPath
+                            $friendlyPath = Get-ItemProperty -Path $PsPath -Name 'FriendlyName' -ErrorAction SilentlyContinue |
+                                                Where-Object FriendlyName -eq ($interface.InterfaceDescription) -ErrorAction SilentlyContinue
+
+                            if ($friendlyPath -ne $null) {
+                                $intNum = $(($interface.Name -split ' ')[1])
+
+                                if ($intNum -eq $null) {
+                                    Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262"
+                                }
+                                Else {
+                                    Set-ItemProperty -Path $friendlyPath.PSPath -Name FriendlyName -Value "QLogic FastLinQ QL41262 #$intNum"
+                                }
+
+                                $intNum = $null
+                            }
+                        }
+
+                        Set-DnsClient -InterfaceAlias $interface.Name  -RegisterThisConnectionsAddress $false
+                    }
+                }
+            }
+        }
+    }
+}
 #endregion
 
 #region create checkpoints
@@ -807,7 +872,7 @@ Function New-AzureStackHCIStageSnapshot {
     param (
         [Parameter(Mandatory=$true)]
         [ValidateSet('0', '1', '3')]
-        [Int32] $Stage
+        [Int32[]] $Stage
     )
 
     Switch ($Stage) {
@@ -976,3 +1041,70 @@ Function Restore-AzureStackHCIStageSnapshot {
     }
 }
 #endregion
+
+Function Register-AzureStackHCIStartupTasks {
+    param (
+        [Parameter(Mandatory=$true)]
+        [Microsoft.HyperV.PowerShell.VirtualMachine[]] $VMs
+    )
+
+    $VMs | ForEach-Object {
+        $thisVM = $_
+
+        New-Item "$VMPath\buildData\logon\$($thisVM.Name)-logon.ps1" -type File -Force -OutVariable startupScript | Out-Null
+
+        # This section needs to be dynamically generated for each system because drives may be different.
+        # Also want rename to run each time if needed
+        $startupContent =  @"
+            # Get the virtual machine name from the parent partition; Replace any non-alphanumeric characters with an underscore; trim to 15 characters
+            `$vmName = (Get-ItemProperty -path "HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters").VirtualMachineName
+            `$vmName = [Regex]::Replace(`$vmName,"\W","_")
+            `$vmName = `$vmName.Substring(0,[System.Math]::Min(15, `$vmName.Length))
+            if (`$env:computername -ne `$vmName) { Rename-Computer -NewName `$vmName}
+
+            # Modify BCD to reduce recovery "help". We want the systems to start as fast as possible if they can. if they can't well just destroy and recreate.
+            bcdedit /ems off
+            bcdedit /set recoveryenabled no
+            bcdedit /timeout 1
+
+            #Stop Server Manager from opening
+            New-ItemProperty -Path HKLM:\Software\Microsoft\ServerManager -Name DoNotOpenServerManagerAtLogon -PropertyType DWORD -Value '0x1' -Force | Out-Null
+"@
+
+        Set-Content -Path $startupScript -value $startupContent
+
+        if ( $LabConfig.VMs.Where{ "$($LabConfig.Prefix)$($_.VMName)" -eq $thisVM.Name }.Role -eq 'AzureStackHCI' ) {
+            #Note: Due to issue with Set-PhysicalDisk, mediatype/name is reset after a reboot
+            #      so we create a scheduled task to run inside the VM at startup; this will also work once S2D is enabled.
+            $theseSCMDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SCMDrives.Size
+            $theseSSDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives.Size
+            $theseHDDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives.Size
+
+            $diskContent = @"
+                Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
+                    Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName "`$(`$env:COMPUTERNAME)-PMEM`$(`$_.DeviceID)" -MediaType SCM
+                }
+
+                Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
+                    Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-SSD`$(`$_.DeviceID)" -MediaType SSD
+                }`
+
+                Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
+                    Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-HDD`$(`$_.DeviceID)" -MediaType HDD
+                }
+"@
+            Add-Content -Path $startupScript -value $diskContent
+        }
+
+        Copy-VMFile -Name $thisVM.Name -SourcePath $startupScript.FullName -DestinationPath $startupScript.FullName -CreateFullPath -FileSource Host -Force
+        Invoke-Command -VMName $thisVM.Name -Credential $localCred -ScriptBlock {
+            $Action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NonInteractive -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$($using:startupScript.FullName)`""
+            $Trigger   = New-ScheduledTaskTrigger -AtStartup
+            $Settings  = New-ScheduledTaskSettingsSet
+            $principal = New-ScheduledTaskPrincipal -LogonType S4U -UserId SYSTEM -RunLevel Highest
+            $Task      = New-ScheduledTask -Action $Action -Trigger $Trigger -Settings $Settings
+
+            Register-ScheduledTask -TaskName 'Azure Stack HCI Startup settings' -Action $action -Trigger $trigger -Settings $settings -Principal $principal
+        }
+    }
+}
