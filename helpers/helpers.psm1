@@ -1,83 +1,4 @@
-# These functions are not exported
-Function Get-LabConfig {
-    # This is the path where VMs will be created for the lab e.g. c:\DataStore\VMs (then \VM01 folder will be added below it)
-    $global:VMPath = 'C:\DataStore\VMs'
-    New-Item -Path $VMPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-
-    $LabConfig = @{
-        # Will be appended to every VM
-        Prefix     = 'AzStackHCI'
-
-        # Lab domain admin
-        DomainAdminName   = 'Bruce'
-        AdminPassword     = 'd@rkKnight!'
-
-        # The FQDN of the lab domain to be created
-        DomainName        = 'gotham.city'
-
-        # This is the filepath to the ISO that will be used to deploy the lab VMs
-        ServerISOFolder   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
-
-        # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
-        # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
-        #Note: Only /24 is supported right now.
-        DHCPscope     = '10.0.0.0'
-
-        SwitchName = 'SiteA'
-        VMs = @()
-    }
-
-    1..4 | ForEach-Object {
-        $LABConfig.VMs += @{
-            VMName        = "0$_"
-
-            # This should always be AzureStackHCI
-            Role = 'AzureStackHCI'
-            MemoryStartupBytes = 8GB
-
-            SCMDrives = @{ Count = 2 ; Size  = 32GB  }
-            SSDDrives = @{ Count = 4 ; Size  = 256GB }
-            HDDDrives = @{ Count = 8 ; Size  = 1TB   }
-
-            #TODO: Adding NIC Naming differently than Mgmt and Ethernet
-            Adapters = @(
-                #Note: Where/when needed, these will include a unique number to distinguish
-                @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
-                @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
-                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
-                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
-                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
-                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
-            )
-        }
-    }
-
-    # Specify WAC System; does not install WAC, just creates server. You will need to ManageAs in WAC due to known CredSSP Bug
-    $LABConfig.VMs += @{
-        VMName        = 'WAC01'
-
-        # This should always be WAC
-        Role          = 'WAC'
-        MemoryStartupBytes = 4GB
-    }
-
-    $LABConfig.VMs += @{
-        VMName        = 'DC01'
-
-        # This should always be Domain Controller
-        Role          = 'Domain Controller'
-        MemoryStartupBytes = 2GB
-    }
-
-    # No touchie! Required but no mods needed - Prep local and domain creds
-    $LabConfig.DomainNetbiosName = ($LabConfig.DomainName.Split('.')[0])
-    $global:pass   = ConvertTo-SecureString $($LabConfig.AdminPassword) -AsPlainText -Force
-    $global:VMCred = New-Object System.Management.Automation.PSCredential ("$($LabConfig.DomainName)\$($LabConfig.DomainAdminName)", $pass)
-    $global:localCred = New-Object System.Management.Automation.PSCredential ('.\Administrator', $pass)
-
-    $LabConfig
-}
-
+# These functions are not exported and you should not ever have to come here...
 #region reboot and VM management
     #TODO: Update with rsJob
 function Wait-ForHeartbeatState {
@@ -518,7 +439,6 @@ Function Add-LabVirtualMachines {
             Set-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -IgnoreIdMismatch -ErrorAction SilentlyContinue
         }
 
-
         Set-VMProcessor -VMName "$($LabConfig.Prefix)$($_.VMName)" -Count 4 -ExposeVirtualizationExtensions $true
         Set-VMMemory    -VMName "$($LabConfig.Prefix)$($_.VMName)" -DynamicMemoryEnabled $true
         Set-VMFirmware  -VMName "$($LabConfig.Prefix)$($_.VMName)" -EnableSecureBoot Off
@@ -916,9 +836,6 @@ Function New-AzureStackHCIStageSnapshot {
             Reset-AzStackVMs -Restart -Wait -VMs $AzureStackHCIVMs
             Wait-ForHeartbeatState -State On -VMs $AzureStackHCIVMs
 
-            # Reset Media Type following reboot
-            Set-AzureStackHCIDiskMediaType
-
             $AzureStackHCIVMs | ForEach-Object {
                 $thisVM = $_
                 Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
@@ -1034,9 +951,8 @@ Function Restore-AzureStackHCIStageSnapshot {
         }
 
         3 {
-            #TODO: This thing
+            #TODO: This whole thing
             #Note: Need to restore the dc as well...
-
         }
     }
 }

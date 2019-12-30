@@ -1,3 +1,82 @@
+Function Get-AzureStackHCILabConfig {
+    # This is the path where VMs will be created for the lab e.g. c:\DataStore\VMs (then \VM01 folder will be added below it)
+    $global:VMPath = 'C:\DataStore\VMs'
+    New-Item -Path $VMPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+
+    $LabConfig = @{
+        # Will be appended to every VM
+        Prefix     = 'AzStackHCI'
+
+        # Lab domain admin
+        DomainAdminName   = 'Bruce'
+        AdminPassword     = 'd@rkKnight!'
+
+        # The FQDN of the lab domain to be created
+        DomainName        = 'gotham.city'
+
+        # This is the filepath to the ISO that will be used to deploy the lab VMs
+        ServerISOFolder   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
+
+        # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
+        # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
+        #Note: Only /24 is supported right now.
+        DHCPscope     = '10.0.0.0'
+
+        SwitchName = 'SiteA'
+        VMs = @()
+    }
+
+    1..4 | ForEach-Object {
+        $LABConfig.VMs += @{
+            VMName        = "0$_"
+
+            # This should always be AzureStackHCI
+            Role = 'AzureStackHCI'
+            MemoryStartupBytes = 8GB
+
+            SCMDrives = @{ Count = 2 ; Size  = 32GB  }
+            SSDDrives = @{ Count = 4 ; Size  = 256GB }
+            HDDDrives = @{ Count = 8 ; Size  = 1TB   }
+
+            #TODO: Adding NIC Naming differently than Mgmt and Ethernet
+            Adapters = @(
+                #Note: Where/when needed, these will include a unique number to distinguish
+                @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
+                @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
+                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
+                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
+                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
+                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
+            )
+        }
+    }
+
+    # Specify WAC System; does not install WAC, just creates server. You will need to ManageAs in WAC due to known CredSSP Bug
+    $LABConfig.VMs += @{
+        VMName        = 'WAC01'
+
+        # This should always be WAC
+        Role          = 'WAC'
+        MemoryStartupBytes = 4GB
+    }
+
+    $LABConfig.VMs += @{
+        VMName        = 'DC01'
+
+        # This should always be Domain Controller
+        Role          = 'Domain Controller'
+        MemoryStartupBytes = 2GB
+    }
+
+    # No touchie! Required but no mods needed - Prep local and domain creds
+    $LabConfig.DomainNetbiosName = ($LabConfig.DomainName.Split('.')[0])
+    $global:pass   = ConvertTo-SecureString $($LabConfig.AdminPassword) -AsPlainText -Force
+    $global:VMCred = New-Object System.Management.Automation.PSCredential ("$($LabConfig.DomainName)\$($LabConfig.DomainAdminName)", $pass)
+    $global:localCred = New-Object System.Management.Automation.PSCredential ('.\Administrator', $pass)
+
+    $LabConfig
+}
+
 Function Approve-AzureStackHCILabState {
     param(
         [Parameter(Mandatory=$True)]
@@ -45,7 +124,7 @@ Function Remove-AzureStackHCILabEnvironment {
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
     Import-Module $helperPath -Force
 
-    if (-not ($labConfig)) { $global:LabConfig = Get-LabConfig }
+    if (-not ($labConfig)) { $global:LabConfig = Get-AzureStackHCILabConfig }
 
     $AllVMs = @()
     $AzureStackHCIVMs = @()
@@ -95,7 +174,7 @@ Function Remove-AzureStackHCILabEnvironment {
 
         Write-Host " - Destroying vSwitch and Nat"
         Remove-VMSwitch "$($LabConfig.Prefix)-$($LabConfig.SwitchName)*" -Force -ErrorAction SilentlyContinue
-        Get-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.SwitchName)" | Remove-NetNat -Confirm:$false
+        Get-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.SwitchName)" -ErrorAction SilentlyContinue | Remove-NetNat -Confirm:$false -ErrorAction SilentlyContinue
 
         Write-Host " - Destroying BaseDisk at $VMPath "
         Remove-Item -Path "$VMPath\BaseDisk_*.vhdx" -Force -ErrorAction SilentlyContinue
@@ -186,13 +265,10 @@ Function Initialize-AzureStackHCILabOrchestration {
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
     Import-Module $helperPath -Force
 
-    $global:LabConfig = Get-LabConfig
+    $global:LabConfig = Get-AzureStackHCILabConfig
 
     # Check that the host is ready with approve host state
     Approve-AzureStackHCILabState -Test Host
-
-    # Initialize lab environment
-    New-AzureStackHCILabEnvironment
 
 #region BaseDisk and VM Creation
     # Hydrate base disk - this is long and painful...
@@ -233,7 +309,6 @@ Function Initialize-AzureStackHCILabOrchestration {
         Remove-Variable BuildDataExists, RebootIsNeeded -ErrorAction SilentlyContinue
 
         $BuildDataExists, $RebootIsNeeded = Invoke-Command -VMName $DC.Name -Credential $localCred -ScriptBlock {
-            $VerbosePreference = 'Continue'
             $thisDC = $using:DC
 
             $metaConfig = Test-Path C:\DataStore\VMs\buildData\config\localhost.mof -ErrorAction SilentlyContinue
@@ -253,7 +328,6 @@ Function Initialize-AzureStackHCILabOrchestration {
                 if ($VMName -eq $null -or $ComputerName -eq $Null) { $VMName = (New-Guid).Guid }
             } until ($VMName -eq $ComputerName)
 
-            Write-Verbose "RebootNeeded = ($ActiveName -ne $ComputerName)"
             $RebootIsNeeded = $ActiveName -ne $ComputerName
             Return $BuildDataExists, $RebootIsNeeded
         }
@@ -426,27 +500,14 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     # Create Default and Stage 1 Snapshots
     New-AzureStackHCIStageSnapshot -Stage 0, 1
-
     Restore-AzureStackHCIStageSnapshot -Stage 0
 
-
-
-
-
-
-
-
-
-
-
     $EndTime = Get-Date
-
     "Start Time: $StartTime"
     "End Time: $EndTime"
 }
 
-<#TODO:
-- Cleanup todos
+<#TODO: Cleanup todos!
 - Test that labconfig is available and not malformed
 - Support using an existing VHD. Make sure it syspreps and adds the unattend file, etc.
 
