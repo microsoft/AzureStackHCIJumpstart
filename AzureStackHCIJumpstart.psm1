@@ -77,36 +77,6 @@ Function Get-AzureStackHCILabConfig {
     $LabConfig
 }
 
-Function Approve-AzureStackHCILabState {
-    param(
-        [Parameter(Mandatory=$True)]
-        [ValidateSet('Host', 'Lab')]
-        [String] $Test
-    )
-
-    $here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
-
-    Switch ($Test) {
-        'Host' {
-            $ValidationResults = Invoke-Pester -Tag Host -Script "$here\tests\unit\AzureStackHCILabState.unit.tests.ps1" -PassThru
-            $ValidationResults | Select-Object -Property TagFilter, Time, TotalCount, PassedCount, FailedCount, SkippedCount, PendingCount | Format-Table -AutoSize
-
-            If ($ValidationResults.FailedCount -ne 0) {
-                Write-Error 'Prerequisite checks on the host have failed. Please review the output to identify the reason for the failures' -ErrorAction Stop
-            }
-        }
-
-        'Lab' {
-            $ValidationResults = Invoke-Pester -Tag Lab -Script "$here\tests\unit\AzureStackHCILabState.unit.tests.ps1" -PassThru
-            $ValidationResults | Select-Object -Property TagFilter, Time, TotalCount, PassedCount, FailedCount, SkippedCount, PendingCount | Format-Table -AutoSize
-
-            If ($ValidationResults.FailedCount -ne 0) {
-                Write-Error 'Prerequisite checks for the lab environment have failed. Please review the output or rerun New-AzureStackHCILabEnvironment' -ErrorAction Stop
-            }
-        }
-    }
-}
-
 Function Remove-AzureStackHCILabEnvironment {
     param (
         # Also destroys basedisk, domain controller, WAC system, and vSwitch
@@ -114,6 +84,10 @@ Function Remove-AzureStackHCILabEnvironment {
     )
 
     Clear-Host
+
+    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+    if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+
 
     If ($FireAndBrimstone) { Write-Host 'Fire and Brimstone was specified -- This environment will self-destruct in T-5 seconds' ; Start-Sleep -Seconds 5 }
 
@@ -184,6 +158,66 @@ Function Remove-AzureStackHCILabEnvironment {
     Get-RSJob | Remove-RSJob | Out-Null
 
     Write-Host 'Clean is finished...Exiting'
+}
+
+Function Restore-AzureStackHCIStageSnapshot {
+    param (
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('0', '1', '3')]
+        [Int32] $Stage
+    )
+
+    #TODO: Restore DC to stage 0 for stage 0 or 1 (includes domain join but not the cluster)
+    #TODO: Restore DC to stage 3 for cluster including CNO
+    Switch ($Stage) {
+        0 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Restoring starting checkpoint" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("Restoring starting checkpoint for: $($thisJobVM.Name)")
+                    Restore-VMSnapshot -Name Start -VMName $thisJobVM.Name -Confirm:$false
+                } | Out-Null
+            }
+
+            Get-RSJob | Wait-RSJob
+            Get-RSJob | Remove-RSJob
+        }
+
+        1 {
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Restoring starting checkpoint" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("Restoring Stage 1 checkpoint for: $($thisJobVM.Name)")
+                    Restore-VMSnapshot -Name 'Stage 1 Complete' -VMName $thisJobVM.Name -Confirm:$false
+                } | Out-Null
+            }
+
+            #Note: DC does not have stage 1 snapshot so apply stage 0 to ensure that CNO from stage 3 is not in the directory
+            $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' } | Foreach-Object { $DCName = "$($LabConfig.Prefix)$($_.VMName)" }
+
+            $AllVMs.Where{ $_.Name -eq $DCName } | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Restoring starting checkpoint" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("Restoring starting checkpoint for: $($thisJobVM.Name)")
+                    Restore-VMSnapshot -Name 'Start' -VMName $thisJobVM.Name -Confirm:$false
+                } | Out-Null
+            }
+
+            Get-RSJob | Wait-RSJob
+            Get-RSJob | Remove-RSJob
+        }
+
+        3 {
+            #TODO: This whole thing
+            #Note: Need to restore the dc as well...
+        }
+    }
 }
 
 Function Initialize-AzureStackHCILabOrchestration {
@@ -270,14 +304,12 @@ Function Initialize-AzureStackHCILabOrchestration {
     # Check that the host is ready with approve host state
     Approve-AzureStackHCILabState -Test Host
 
-#region BaseDisk and VM Creation
+#region BaseDisk and VM Create
     # Hydrate base disk - this is long and painful...
     New-BaseDisk
 
     # Update BaseDisk with buildData
     Initialize-BaseDisk
-
-    #TODO: Start domain creation now but don't wait for it to finish, then create VMs, and reparent
 
     # Create Virtual Machines
     Add-LabVirtualMachines
