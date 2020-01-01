@@ -1,9 +1,9 @@
 # Jumpstart your Azure Stack HCI Lab
 
-This module is intended to deploy a lab environment for testing Azure Stack HCI - specifically using the deployment UI in Windows Admin Center. With this module, you can test the Azure Stack HCI deployment in various configurations:
+This module is intended to deploy a ****lab environment*** for testing Azure Stack HCI - specifically using the deployment UI in Windows Admin Center. With this module, you can test your Azure Stack HCI deployment in VMs, on a single host, in various configurations including various:
 
-- Various NIC configurations
-- Various disk types (SCM, SSD, HDD)
+- NIC configurations
+- Disk types (SCM, SSD, HDD)
 
 For more details on what this does, please see [What it does in a little more depth](#What-it-does-in-a-little-more-depth)
 
@@ -19,8 +19,9 @@ The latest version added:
 
 - Resolved issues where the disk media types were reset following a reboot
 
-- Moved exported functions to the main module; removed non-exported functions to the helpers module. You should now only call functions located in the AzureStackHCIJumpstart module
+- Moved functions that can be called by the user to the main module `\AzureStackHCIJumpstart.psm1`
 
+- Moved functions used by the module (not directly by the user) to the helpers module.
 
 # Getting Started
 
@@ -29,8 +30,10 @@ By default you must update **one** value to run the module.
 1. Open ****.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1****
 
 2. In the `Get-AzureStackHCILabConfig` function, edit the `ServerISOFolder` property
-    a. This is the path to a Windows ISO file.
-    b. This is the ISO used for installing all the VMs. You can use existing VMs rather than create your own however you still need to give a path to an ISO file. Instructions for using your own VMs are out of scope.
+
+    a. This is the path to a Windows ISO file used to create the base (parent) disk
+
+    b. You can use existing VMs rather than create your own however you still need to give a path to an ISO file. Instructions for using your own VMs are out of scope.
 
 3. Run `Initialize-AzureStackHCILabOrchestration`
 
@@ -40,53 +43,53 @@ By default you must update **one** value to run the module.
 
 2. In the `Get-AzureStackHCILabConfig` function, edit the desired properties
 
-### Example 1: Change the file location (VMs, basedisk, etc.)
+### Example 1: Change the file location where VMs, basedisk, etc. will be stored
 
 Old:
 
 ```powershell
-$global:VMPath = 'C:\DataStore\VMs'
+    $global:VMPath = 'C:\DataStore\VMs'
 ```
 
 New:
 
 ```powershell
-    $global:VMPath = 'C:\SomeNewFolder\VMs'
+    $global:VMPath = 'C:\SomeNewFolder\MyVMPath'
 ```
 
 ### Example 2: Change the domain name and password
 
 Old:
 
-    ```PowerShell
+```PowerShell
     DomainAdminName   = 'Bruce'
     AdminPassword     = 'd@rkKnight!'
     DomainName        = 'gotham.city'
-    ```
+```
 
 New:
 
-    ```PowerShell
+```PowerShell
     DomainAdminName   = 'Harley'
     AdminPassword     = 'h@rlequ1n'
     DomainName        = 'Arkham.Assylum'
-    ```
+```
 
 ### Example 3: Change the number of Azure Stack HCI VMs
 
 Old:
 
-    ```PowerShell
+```PowerShell
     1..4 | ForEach-Object {
         $LABConfig.VMs += @{
-    ```
+```
 
 New:
 
-    ```PowerShell
+```PowerShell
     1..2 | ForEach-Object {
         $LABConfig.VMs += @{
-    ```
+```
 
 ## Deployment
 
