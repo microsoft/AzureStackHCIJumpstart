@@ -5,37 +5,95 @@ This module is intended to deploy a lab environment for testing Azure Stack HCI 
 - Various NIC configurations
 - Various disk types (SCM, SSD, HDD)
 
-For more details on what this does, please see [What it does in a little more depth](#What it does in a little more depth)
+For more details on what this does, please see [What it does in a little more depth](#What-it-does-in-a-little-more-depth)
 
+## What's New - Version 2020.1.1.2
 
-## What's New - 12/31/19
-
-In the latest updates we have added:
+The latest version added:
 
 - Parallelization for several tasks that applied to all VMs or the Azure Stack HCI VMs
 
-- Checkpoints that let you accelerate the deployment phases (Currently stage 1 and 3 only)
+- Checkpoints that let you accelerate the deployment phases (Currently stage 0 and 1 only)
 
 - Internet access from the VMs
-    - Uses an internal vSwitch on the host to provide a NAT (https://docs.microsoft.com/en-us/virtualization/hyper-v-on-windows/user-guide/setup-nat-network) to the VMs.
-    The internal domain
 
 - Resolved issues where the disk media types were reset following a reboot
 
 - Moved exported functions to the main module; removed non-exported functions to the helpers module. You should now only call functions located in the AzureStackHCIJumpstart module
 
 
-# Customizing the deployment
+# Getting Started
 
-By default you only need to update one value to run this
+By default you must update **one** value to run the module.
 
-..\helpers\helpers.psm1 - Edit the path to the ISO file. This is the ISO used for installing all the VMs. (you can use existing VMs rather than create your own. But you still need to give a path to an ISO file)
+1. Open ****.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1****
+
+2. In the ```Get-AzureStackHCILabConfig``` function, edit the ```ServerISOFolder``` property
+    a. This is the path to a Windows ISO file.
+    b. This is the ISO used for installing all the VMs. You can use existing VMs rather than create your own however you still need to give a path to an ISO file. Instructions for using your own VMs are out of scope.
+
+3. Run ```Initialize-AzureStackHCILabOrchestration```
+
+## Additional (but not required) configuration
+
+1. Open ****.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1****
+
+2. In the ```Get-AzureStackHCILabConfig``` function, edit the desired properties
+
+### Example 1: Change the file location (VMs, basedisk, etc.)
+
+Old:
+
+    ```PowerShell
+    $global:VMPath = 'C:\DataStore\VMs'
+    ```
+
+New:
+
+    ```PowerShell
+    $global:VMPath = 'C:\SomeNewFolder\VMs'
+    ```
+
+### Example 2: Change the domain name and password
+
+Old:
+
+    ```PowerShell
+    DomainAdminName   = 'Bruce'
+    AdminPassword     = 'd@rkKnight!'
+    DomainName        = 'gotham.city'
+    ```
+
+New:
+
+    ```PowerShell
+    DomainAdminName   = 'Harley'
+    AdminPassword     = 'h@rlequ1n'
+    DomainName        = 'Arkham.Assylum'
+    ```
+
+### Example 3: Change the number of Azure Stack HCI VMs
+
+Old:
+
+    ```PowerShell
+    1..4 | ForEach-Object {
+        $LABConfig.VMs += @{
+    ```
+
+New:
+
+    ```PowerShell
+    1..2 | ForEach-Object {
+        $LABConfig.VMs += @{
+    ```
 
 ## Deployment
 
 Note: The long-term goal is that these two commands can all be run independently but additional testing is needed. If you find an issue, file a bug and just keep running the lab orchestration command
 
 ```New-AzureStackHCILabEnvironment```
+
 ```Invoke-AzureStackHCILabVMCustomization```
 
 ### Deploy the entire lab with VM customization
@@ -62,12 +120,11 @@ Note: The long-term goal is that these two commands can all be run independently
 
 # What it does in a little more depth
 
-> ## Subtitle: Why does it take so long?
+> ### Subtitle: Why does it take so long?
 
 It's doing a lot and there are some long-running tasks (measured in minutes rather than seconds). Here's a quick look at the overall process:
 
 > Note: Several of these tasks are parallelized so output on screen may appear out of order.
-
 > Note: Any steps that have already been completed are skipped on subsequent runs of the module.
 
 - Run prerequisite checks on the host
