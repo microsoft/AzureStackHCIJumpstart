@@ -1,3 +1,8 @@
+```powershell
+Install-Module -Name platyPS -Scope CurrentUser
+Import-Module platyPS
+```
+
 # Jumpstart your Azure Stack HCI Lab
 
 This module is intended to deploy a lab environment for testing Azure Stack HCI - specifically using the deployment UI in Windows Admin Center. With this module, you can test the Azure Stack HCI deployment in various configurations:
