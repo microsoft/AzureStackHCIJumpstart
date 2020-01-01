@@ -28,17 +28,17 @@ By default you must update **one** value to run the module.
 
 1. Open ****.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1****
 
-2. In the ```Get-AzureStackHCILabConfig``` function, edit the ```ServerISOFolder``` property
+2. In the `Get-AzureStackHCILabConfig` function, edit the `ServerISOFolder` property
     a. This is the path to a Windows ISO file.
     b. This is the ISO used for installing all the VMs. You can use existing VMs rather than create your own however you still need to give a path to an ISO file. Instructions for using your own VMs are out of scope.
 
-3. Run ```Initialize-AzureStackHCILabOrchestration```
+3. Run `Initialize-AzureStackHCILabOrchestration`
 
 ## Additional (but not required) configuration
 
 1. Open ****.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1****
 
-2. In the ```Get-AzureStackHCILabConfig``` function, edit the desired properties
+2. In the `Get-AzureStackHCILabConfig` function, edit the desired properties
 
 ### Example 1: Change the file location (VMs, basedisk, etc.)
 
@@ -50,7 +50,7 @@ Old:
 
 New:
 
-    ```PowerShell
+    ```powershell
     $global:VMPath = 'C:\SomeNewFolder\VMs'
     ```
 
