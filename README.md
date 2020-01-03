@@ -29,7 +29,7 @@ By default you must update **one** value to run the module.
 
 1. Open ****.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1****
 
-2. In the `Get-AzureStackHCILabConfig` function, edit the `ServerISOFolder` property
+2. In the `Get-AzureStackHCILabConfig` function, edit the `ServerISO` property
 
     a. This is the path to a Windows ISO file used to create the base (parent) disk
 
@@ -47,13 +47,13 @@ By default you must update **one** value to run the module.
 
 Old:
 
-```powershell
+```PowerShell
     $global:VMPath = 'C:\DataStore\VMs'
 ```
 
 New:
 
-```powershell
+```PowerShell
     $global:VMPath = 'C:\SomeNewFolder\MyVMPath'
 ```
 
@@ -91,35 +91,41 @@ New:
         $LABConfig.VMs += @{
 ```
 
-## Deployment
+# Deployment
 
-Note: The long-term goal is that these two commands can all be run independently but additional testing is needed. If you find an issue, file a bug and just keep running the lab orchestration command
+> Note: This module is designed to be run multiple times. If you run into an issue, file a bug and rerun the lab orchestration.
 
-```New-AzureStackHCILabEnvironment```
+## Deploy the lab
 
-```Invoke-AzureStackHCILabVMCustomization```
+```PowerShell
+    Initialize-AzureStackHCILabOrchestration
+```
 
-### Deploy the entire lab with VM customization
+## Restore the whole lab to a stage
 
-```Initialize-AzureStackHCILabOrchestration```
+While you can restore the snapshots manually, this ensures that all machines are on the correct snapshot with one command (potentially including the domain controller)
 
-### Just Deploy the lab infrastructure (don't customize VMs)
+```PowerShell
+    Restore-AzureStackHCIStageSnapshot -Stage 0
+```
 
-```New-AzureStackHCILabEnvironment```
+```PowerShell
+    Restore-AzureStackHCIStageSnapshot -Stage 1
+```
 
-### Customize the lab VMs; don't redeploy stuff
-
-```Invoke-AzureStackHCILabVMCustomization```
-
-## Destruction
+## Remove the lab
 
 **Removes all HCI VMs (Hyper-V Hosts and WAC VM)**
 
-```Remove-AzureStackHCILabEnvironment```
+```PowerShell
+    Remove-AzureStackHCILabEnvironment
+```
 
-**Additionally removes the domain controller, virtual switch, and base disk**
+**Additionally removes the domain controller, virtual switch, NAT configuration, and base disk**
 
-```Remove-AzureStackHCILabEnvironment -FireAndBrimstone```
+```PowerShell
+    Remove-AzureStackHCILabEnvironment -FireAndBrimstone
+```
 
 # What it does in a little more depth
 
@@ -150,24 +156,30 @@ It's doing a lot and there are some long-running tasks (measured in minutes rath
 - {long} Create the AD Domain; configures DHCP used to program the rest of the VMs; configures DNS to resolve internet-based resources.
 
 - {long} Creates VM Snapshots to allow you to test different stages more easily
-    - Stage 0 - Includes anything needed before the deployment UI can start
-    - Stage 1 - Windows features are installed on Azure Stack HCI VMs
-    - Stage 2 (Net) - No snapshot currently taken
-    - Stage 3       - #TODO: Update this section
-    - Stage 4 (S2D) - No snapshot currently taken
-    - Stage 5 (SDN) - No snapshot currently taken
+    - Stage 0 (Base) - Includes anything needed before the deployment UI can start
+    - Stage 1 (Feat) - Windows features are installed on Azure Stack HCI VMs
+    - Stage 2 (Net)  - No snapshot currently taken
+    - Stage 3        - #TODO: Update this section
+    - Stage 4 (S2D)  - No snapshot currently taken
+    - Stage 5 (SDN)  - No snapshot currently taken
 
 # Community or external modules used
 
 Special thanks to the owners/maintainers of these modules:
 
-- Convert-WindowsImage (Microsoft Hyper-V Team)
-- Pester
-- PoshRSJob
-- NetworkingDsc
-- xActiveDirectory
-- xDHCPServer
-- xDNSServer
+- [Convert-WindowsImage](https://github.com/MicrosoftDocs/Virtualization-Documentation/tree/master/hyperv-tools/Convert-WindowsImage) - By the Microsoft Hyper-V Team
+
+- [Pester](https://github.com/pester/Pester)
+
+- [PoshRSJob](https://github.com/proxb/PoshRSJob)
+
+- [NetworkingDsc](https://github.com/dsccommunity/NetworkingDsc)
+
+- [xActiveDirectory](https://github.com/dsccommunity/ActiveDirectoryDsc)
+
+- [xDHCPServer](https://github.com/dsccommunity/xDhcpServer)
+
+- [xDNSServer](https://github.com/dsccommunity/xDnsServer)
 
 # Contributing
 

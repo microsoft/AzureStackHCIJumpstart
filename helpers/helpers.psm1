@@ -133,7 +133,7 @@ Function Reset-AzStackVMs {
 #region Base Disk for VMs
 Function New-BaseDisk {
     Write-Host "`t Mounting ISO for Hydration"
-    $MountedISO     = Mount-DiskImage -ImagePath $LabConfig.ServerISOFolder -PassThru -InformationAction SilentlyContinue
+    $MountedISO     = Mount-DiskImage -ImagePath $LabConfig.ServerISO -PassThru -InformationAction SilentlyContinue
     $ISODriveLetter = "$((Get-Volume -DiskImage $MountedISO -InformationAction SilentlyContinue).DriveLetter):"
     $BuildNumber    = (Get-ItemProperty -Path (Join-Path -Path $ISODriveLetter -ChildPath "setup.exe") -InformationAction SilentlyContinue).VersionInfo.FileBuildPart
     $WindowsImage   = Get-WindowsImage -ImagePath (Join-Path -Path $ISODriveLetter -ChildPath "sources\install.wim") -InformationAction SilentlyContinue
@@ -150,7 +150,7 @@ Function New-BaseDisk {
     }
 
     Write-Host "`t Dismounting ISO Image"
-    Dismount-DiskImage -ImagePath $LabConfig.ServerISOFolder -InformationAction SilentlyContinue | Out-Null
+    Dismount-DiskImage -ImagePath $LabConfig.ServerISO -InformationAction SilentlyContinue | Out-Null
 }
 
 #Create Unattend for VHD
@@ -171,7 +171,7 @@ Function New-UnattendFileForVHD {
 
     if ( Test-Path "$Path\Unattend.xml" ) { Remove-Item "$Path\Unattend.xml" -InformationAction SilentlyContinue }
 
-    New-Item "$Path\Unattend.xml" -type File -Force -OutVariable unattendFile | Out-Null
+    New-Item "$Path\Unattend.xml" -ItemType File -Force -OutVariable unattendFile | Out-Null
     $fileContent =  @"
     <?xml version="1.0" encoding="utf-8"?>
     <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -223,6 +223,9 @@ Function Initialize-BaseDisk {
     Write-Host "`t Applying Unattend and copying DSC Modules"
     $unattendfile = "$VMPath\buildData\Unattend.xml"
 
+    # If using ServerISO, this is set Function:\New-BaseDisk. If using BaseVHDX, this needs to be set
+    If ($LabConfig.BaseVHDX) { $global:VHDPath = $LabConfig.BaseVHDX }
+
     If ( Test-Path $VHDPath ) {
         Dismount-DiskImage -ImagePath $VHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
         $MountedDisk = Mount-DiskImage    -ImagePath $VHDPath -StorageType VHDX -ErrorAction SilentlyContinue
@@ -245,18 +248,18 @@ Function Initialize-BaseDisk {
 
                     Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {
                         Copy-Item -Path "C:\Program Files\WindowsPowerShell\Modules\$($using:thisModule)" -Destination "$($using:MountPath)\Program Files\WindowsPowerShell\Modules\" -Recurse -Force
-                    } | Out-Null
+                    } -OutVariable +RSJob | Out-Null
                 }
 
-                Get-RSJob | Wait-RSJob
-                Get-RSJob | Remove-RSJob
+                Wait-RSJob   $RSJob | Out-Null
+                Remove-RSJob $RSJob | Out-Null
 
                 Copy-Item -Path $unattendfile -Destination "$MountPath\Windows\Panther\unattend.xml" -Force
             }
         }
         Else { Write-Host "`t $VHDPath could not be mounted but was found (likely in use)" }
     }
-    Else { Write-Host "$VHDPath was not found - Can't hydrate the basedisk" }
+    Else { Write-Error "$VHDPath was not found - Can't hydrate the basedisk" -ErrorAction Stop }
 
     Dismount-DiskImage -ImagePath $VHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
     Set-ItemProperty -Path $VHDPath -Name IsReadOnly -Value $true
@@ -592,7 +595,7 @@ Function Remove-AzureStackHCIVMHardware {
 
             [Console]::WriteLine("`t Removing virtual adapters from: $($thisJobVM.Name)")
             Get-VMNetworkAdapter -VMName $thisJobVM.Name | ForEach-Object { Remove-VMNetworkAdapter -VMName $thisJobVM.Name }
-        } | Out-Null
+        } -OutVariable +RSJob | Out-Null
     }
 }
 
@@ -660,7 +663,7 @@ Function New-AzureStackHCIVMS2DDisks {
                     Add-VMHardDiskDrive -VMName $thisJobVM.Name -Path "$HDDPath\$($thisJobVM.Name)-HDD-$_.VHDX" -ControllerType SCSI -ControllerNumber 3 -ControllerLocation $_ -ErrorAction SilentlyContinue | Out-Null
                 }
             }
-        } | Out-Null
+        } -OutVariable +RSJob | Out-Null
     }
 }
 
@@ -735,10 +738,8 @@ Function New-AzureStackHCIVMAdapters {
 
                 $AdapterCount ++
             }
-        } | Out-Null
+        } -OutVariable +RSJob | Out-Null
     }
-
-    Get-RSJob | Where-Object Name -like "*-ConfigureAdapters" | Wait-RSJob | Out-Null
 }
 
 Function Set-AzureStackHCIVMAdapters {
@@ -823,118 +824,6 @@ Function Set-AzureStackHCIVMAdapters {
         }
     }
 }
-#endregion
-
-#region create checkpoints
-Function New-AzureStackHCIStageSnapshot {
-    param (
-        [Parameter(Mandatory=$true)]
-        [ValidateSet('0', '1', '3')]
-        [Int32[]] $Stage
-    )
-
-    Switch ($Stage) {
-        0 {
-            $AllVMs | ForEach-Object {
-                $thisVM = $_
-                Start-RSJob -Name "$($thisVM.Name)-Stage 0 Checkpoints" -ScriptBlock {
-                    $thisJobVM = $using:thisVM
-
-                    [Console]::WriteLine("Verifying Starting checkpoint exists for: $($thisJobVM.Name)")
-                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
-                        [Console]::WriteLine("`t Creating starting checkpoint for: $($thisJobVM.Name)")
-                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Start'
-                    }
-                } | Out-Null
-            }
-
-            Get-RSJob | Wait-RSJob
-            Get-RSJob | Remove-RSJob
-        }
-
-        1 {
-            #TODO: Apply Stage 0 checkpoint first
-            $AzureStackHCIVMs | ForEach-Object {
-                $thisVM = $_
-                Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
-                    $thisJobVM = $using:thisVM
-
-                    [Console]::WriteLine("Checking and/or Installing Stage 1 Features for: $($thisJobVM.Name)")
-                    Invoke-Command -VMName $thisJobVM.Name -Credential $using:VMCred -ScriptBlock {
-                        Install-WindowsFeature -Name 'Bitlocker', 'Data-Center-Bridging', 'Failover-Clustering', 'FS-Data-Deduplication', 'Hyper-V', 'RSAT-AD-PowerShell' -IncludeManagementTools
-                    }
-                } | Out-Null
-            }
-
-            Get-RSJob | Wait-RSJob
-            Get-RSJob | Remove-RSJob
-
-            #Note: Reboot to complete the installations, then wait again in case multiple reboots occur.
-            Write-Host "Restarting VMs following feature installation for stage 1 checkpoint"
-            Reset-AzStackVMs -Restart -Wait -VMs $AzureStackHCIVMs
-            Wait-ForHeartbeatState -State On -VMs $AzureStackHCIVMs
-
-            $AzureStackHCIVMs | ForEach-Object {
-                $thisVM = $_
-                Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
-                    $thisJobVM = $using:thisVM
-
-                    [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisVM.Name)")
-                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete')) {
-                        [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
-                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
-                    }
-                }
-            }
-
-            Get-RSJob | Wait-RSJob
-            Get-RSJob | Remove-RSJob
-        }
-
-        3 {
-            $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
-                $thisVM = $_
-
-                [Console]::WriteLine("`t Preping Stage 3 - Clustering")
-                [Console]::WriteLine("`t `t Running Test Cluster on: $($thisVM.Name)")
-                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock { Test-Cluster -Node $($Using:AzureStackHCIVMs.Name) -WarningAction SilentlyContinue | Out-Null }
-
-                $DomainController = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
-                $DCName = "$($LabConfig.Prefix)$($DomainController.VMName)"
-                $CNOExists = Invoke-Command -VMName $DCName -Credential $VMCred -ScriptBlock {
-                    #Note: Have to try/catch because remove-adcomputer won't shutup even with erroraction silentlycontinue
-                    try { Remove-ADComputer -Identity "$($using:LabConfig.Prefix)" -Confirm:$false }
-                    catch { [Console]::WriteLine("`t `t CNO was not found. Continuing with cluster creation)") }
-                }
-
-                if ($CNOExists) { Write-Host "AzStackHCI Computer account still exists - this should occur but the Cluster won't be able to be created...troubleshoot the removal of the account" }
-                Else {
-                    Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-                        #Note: Once Stage 2 is configured with separate L3 adapters, you may have to come back here and ignore networks for the CAP to be built on
-                        New-Cluster -Name "$($using:LabConfig.Prefix)" -Node $($Using:AzureStackHCIVMs.Name) -Force | Out-Null
-                    }
-                }
-            }
-
-            # Need the DC now that there is an AD Object
-            $AllVMs | ForEach-Object {
-                $thisVM = $_
-                Start-RSJob -Name "Stage 3 Checkpoint for: $($thisVM.Name)" -ScriptBlock {
-                    $thisJobVM = $using:thisVM
-
-                    [Console]::WriteLine("`t Creating Stage 3 checkpoint")
-                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 3 Complete')) {
-                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 3 Complete'
-                    }
-                }
-            }
-
-            Get-RSJob | Wait-RSJob
-            Get-RSJob | Remove-RSJob
-        }
-    }
-}
-#endregion
 
 Function Register-AzureStackHCIStartupTasks {
     param (
@@ -1002,3 +891,121 @@ Function Register-AzureStackHCIStartupTasks {
         }
     }
 }
+#endregion
+
+#region create checkpoints
+Function New-AzureStackHCIStageSnapshot {
+    param (
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('0', '1', '3')]
+        [Int32[]] $Stage
+    )
+
+    Switch ($Stage) {
+        0 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Stage 0 Checkpoints" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("Verifying Starting checkpoint exists for: $($thisJobVM.Name)")
+                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
+                        [Console]::WriteLine("`t Creating starting checkpoint for: $($thisJobVM.Name)")
+                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Start'
+                    }
+                } -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+        }
+
+        1 {
+            #TODO: Apply Stage 0 checkpoint first
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("Checking and/or Installing Stage 1 Features for: $($thisJobVM.Name)")
+                    Invoke-Command -VMName $thisJobVM.Name -Credential $using:VMCred -ScriptBlock {
+                        Install-WindowsFeature -Name 'Bitlocker', 'Data-Center-Bridging', 'Failover-Clustering', 'FS-Data-Deduplication', 'Hyper-V', 'RSAT-AD-PowerShell' -IncludeManagementTools
+                    }
+                }  -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+
+            #Note: Reboot to complete the installations, then wait again in case multiple reboots occur.
+            Write-Host "Restarting VMs following feature installation for stage 1 checkpoint"
+            Reset-AzStackVMs -Restart -Wait -VMs $AzureStackHCIVMs
+            Wait-ForHeartbeatState -State On -VMs $AzureStackHCIVMs
+
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisVM.Name)")
+                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete')) {
+                        [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
+                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
+                    }
+                } -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+        }
+
+        3 {
+            $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
+                $thisVM = $_
+
+                [Console]::WriteLine("`t Preping Stage 3 - Clustering")
+                [Console]::WriteLine("`t `t Running Test Cluster on: $($thisVM.Name)")
+                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock { Test-Cluster -Node $($Using:AzureStackHCIVMs.Name) -WarningAction SilentlyContinue | Out-Null }
+
+                $DomainController = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
+                $DCName = "$($LabConfig.Prefix)$($DomainController.VMName)"
+                $CNOExists = Invoke-Command -VMName $DCName -Credential $VMCred -ScriptBlock {
+                    #Note: Have to try/catch because remove-adcomputer still errors if account doesn't exist even with erroraction silentlycontinue
+                    try { Remove-ADComputer -Identity "$($using:LabConfig.Prefix)" -Confirm:$false }
+                    catch { [Console]::WriteLine("`t `t CNO was not found. Continuing with cluster creation)") }
+                    finally { $CNO = Get-ADComputer -Identity "$($using:LabConfig.Prefix)" -ErrorAction SilentlyContinue }
+
+                    return $CNO
+                }
+
+                if ($CNOExists) {
+                    [Console]::WriteLine("`n `t AzStackHCI Computer account was unable to be removed and the Cluster won't be able to be created. Remove Stage 3 snapshots, troubleshoot the removal of the CNO Account and try again")
+                }
+                Else {
+                    Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+                        #Note: Once Stage 2 is configured with separate L3 adapters, you may have to come back here and ignore networks for the CAP to be built on
+                        New-Cluster -Name "$($using:LabConfig.Prefix)" -Node $($Using:AzureStackHCIVMs.Name) -Force | Out-Null
+                    }
+                }
+            }
+
+            # Need the DC now that there is an AD Object
+            $AllVMs.Where{$_.Role -eq 'AzureStackHCI'} ,
+            $AllVMs.Where{$_.Role -eq 'Domain Controller'} | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "Stage 3 Checkpoint for: $($thisVM.Name)" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("`t Creating Stage 3 checkpoint")
+                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 3 Complete')) {
+                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 3 Complete'
+                    }
+                } -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+        }
+    }
+}
+#endregion

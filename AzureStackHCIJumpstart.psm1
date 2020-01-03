@@ -15,7 +15,9 @@ Function Get-AzureStackHCILabConfig {
         DomainName        = 'gotham.city'
 
         # This is the filepath to the ISO that will be used to deploy the lab VMs
-        ServerISOFolder   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
+        ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
+
+        #BaseVHDX    = 'C:\DataStore\CustomVHD\BaseDisk_19540_server_serverdatacenter_en-us_vl.vhdx'
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
@@ -30,7 +32,7 @@ Function Get-AzureStackHCILabConfig {
         $LABConfig.VMs += @{
             VMName        = "0$_"
 
-            # This should always be AzureStackHCI
+            # 'Role' should always be AzureStackHCI
             Role = 'AzureStackHCI'
             MemoryStartupBytes = 8GB
 
@@ -53,19 +55,19 @@ Function Get-AzureStackHCILabConfig {
 
     # Specify WAC System; does not install WAC, just creates server. You will need to ManageAs in WAC due to known CredSSP Bug
     $LABConfig.VMs += @{
-        VMName        = 'WAC01'
+        VMName = 'WAC01'
+        MemoryStartupBytes = 4GB
 
         # This should always be WAC
-        Role          = 'WAC'
-        MemoryStartupBytes = 4GB
+        Role = 'WAC'
     }
 
     $LABConfig.VMs += @{
         VMName        = 'DC01'
-
-        # This should always be Domain Controller
-        Role          = 'Domain Controller'
         MemoryStartupBytes = 2GB
+
+        # This should always be Domain Controller - Do not change
+        Role          = 'Domain Controller'
     }
 
     # No touchie! Required but no mods needed - Prep local and domain creds
@@ -178,11 +180,11 @@ Function Restore-AzureStackHCIStageSnapshot {
 
                     [Console]::WriteLine("Restoring starting checkpoint for: $($thisJobVM.Name)")
                     Restore-VMSnapshot -Name Start -VMName $thisJobVM.Name -Confirm:$false
-                } | Out-Null
+                } -OutVariable +RSJob | Out-Null
             }
 
-            Get-RSJob | Wait-RSJob
-            Get-RSJob | Remove-RSJob
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
         }
 
         1 {
@@ -193,7 +195,7 @@ Function Restore-AzureStackHCIStageSnapshot {
 
                     [Console]::WriteLine("Restoring Stage 1 checkpoint for: $($thisJobVM.Name)")
                     Restore-VMSnapshot -Name 'Stage 1 Complete' -VMName $thisJobVM.Name -Confirm:$false
-                } | Out-Null
+                } -OutVariable +RSJob | Out-Null
             }
 
             #Note: DC does not have stage 1 snapshot so apply stage 0 to ensure that CNO from stage 3 is not in the directory
@@ -206,11 +208,11 @@ Function Restore-AzureStackHCIStageSnapshot {
 
                     [Console]::WriteLine("Restoring starting checkpoint for: $($thisJobVM.Name)")
                     Restore-VMSnapshot -Name 'Start' -VMName $thisJobVM.Name -Confirm:$false
-                } | Out-Null
+                } -OutVariable +RSJob | Out-Null
             }
 
-            Get-RSJob | Wait-RSJob
-            Get-RSJob | Remove-RSJob
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
         }
 
         3 {
@@ -223,52 +225,36 @@ Function Restore-AzureStackHCIStageSnapshot {
 Function Initialize-AzureStackHCILabOrchestration {
 <#
     .SYNOPSIS
-        Run this to orchestrate the entire setup of the Azure Stack HCI lab environment
+        Run this to orchestrate the setup of the Azure Stack HCI lab environment
 
     .DESCRIPTION
         This module will help you deploy the Azure Stack HCI lab environment. This is not intended for production deployments.
 
-        This script will:
-        - Deploy the lab environment VMs
-        - Create the AD Domain
-        - Create additional VMs for Azure Stack HCI and Windows Admin Center
-        - Configure the VMs
-
-        Note: This function only calls exported functions
-
-    .PARAMETER LabDomainName
-        This is the domain name for the lab environment (will be created)
-
-    .PARAMETER LabAdmin
-        The domain admin username for the LabDomainName domain
-
-    .PARAMETER LabPassword
-        The plaintext password to be used for the LabAdmin account
-
-    .PARAMETER HostVMSwitchName
-        The name of the host virtual switch to attach lab VMs to
+        For more information, please see: gitHub.com/Microsoft/AzureStackHCIJumpstart
 
     .EXAMPLE
-        TODO: Create Example
+        For examples, please see: gitHub.com/Microsoft/AzureStackHCIJumpstart
 
     .NOTES
         Author: Microsoft Azure Stack HCI vTeam
-
         Please file issues on GitHub @ GitHub.com/Microsoft/AzureStackHCIJumpstart
 
     .LINK
         More projects : https://aka.ms/HCI-Deployment
-        Email Address : TODO
+        Email Address : HCI-Deployment@Microsoft.com
 #>
 
-    $StartTime = Get-Date
     Clear-Host
-
-    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
-    if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
 
     $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
     Write-Host "Azure Stack HCI Jumpstart module is running from: $here"
+    New-Item "$here\timer.log" -ItemType File -Force -OutVariable logfile | Out-Null
+
+    $StartTime = Get-Date
+    "Start Time: $($StartTime.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+
+    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+    if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
 
     #Note: These are required until this entire package is published in the PoSH gallery. Once completed, requiredmodules will be used in the manifest.
     Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" | Foreach-Object {
@@ -283,17 +269,17 @@ Function Initialize-AzureStackHCILabOrchestration {
     Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" -Exclude PoshRSJob | foreach-Object {
         $thisModule = $_
         $path = $_.FullName
-        $destPath = "C:\Program Files\WindowsPowerShell\Modules\$_"
+        $destPath = "C:\Program Files\WindowsPowerShell\Modules\"
 
         Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {
-            Copy-Item -Path $using:path -Recurse -Destination $using:destPath -Container -Force -ErrorAction SilentlyContinue
-        } | Out-Null
+            Copy-Item -Path $using:path -Recurse -Destination $using:destPath -Force
+        } -OutVariable +RSJob | Out-Null
 
-        Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
+        Import-Module -Name $thisModule -Force -Global -ErrorAction SilentlyContinue
     }
 
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
+    Wait-RSJob   $RSJob | Out-Null
+    Remove-RSJob $RSJob | Out-Null
 #endregion
 
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
@@ -301,19 +287,34 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     $global:LabConfig = Get-AzureStackHCILabConfig
 
+    $timer = Get-Date
+    "Beginning Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
     # Check that the host is ready with approve host state
     Approve-AzureStackHCILabState -Test Host
 
+    $timer = Get-Date
+    "Completed Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
 #region BaseDisk and VM Create
     # Hydrate base disk - this is long and painful...
-    New-BaseDisk
+    if ($LabConfig.ServerISO) {
+        New-BaseDisk
+
+        $timer = Get-Date
+        "Completed base disk creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    }
 
     # Update BaseDisk with buildData
     Initialize-BaseDisk
 
+    $timer = Get-Date
+    "Completed base disk initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+
     # Create Virtual Machines
     Add-LabVirtualMachines
     $global:AllVMs, $global:AzureStackHCIVMs = Get-LabVMs
+
+    $timer = Get-Date
+    "Completed VM Creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
 #endregion
 
 #region VM Startup
@@ -323,6 +324,9 @@ Function Initialize-AzureStackHCILabOrchestration {
     $DCName = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
     $DC     = Get-VM -VMName "$($LabConfig.Prefix)$($DCName.VMName)" -ErrorAction SilentlyContinue
     Reset-AzStackVMs -Start -VMs $DC -Wait
+
+    $timer = Get-Date
+    "Completed Domain Controller VM initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
 
     #Note: Unattend file renames the VM on first startup; now we need to ensure that the machine has been rebooted prior to beginning DC Promotion
     Write-Host 'Renaming Host and Prepping for DC Promotion'
@@ -367,12 +371,21 @@ Function Initialize-AzureStackHCILabOrchestration {
         [Console]::WriteLine("`t Reboot is needed: $RebootIsNeeded")
         if ($RebootIsNeeded) { Reset-AzStackVMs -VMs $DC -Restart -Wait }
     } Until (($BuildDataExists -eq $true) -and ($RebootIsNeeded -eq $false))
+
+    $timer = Get-Date
+    "Completed Domain Controller rename, reboot, scheduled tasks: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
 #endregion
 
 #region Domain Creation and VM online customization
+
+    $timer = Get-Date
+    "Initializing domain creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
     # This runs asynchronously as nothing depends on this being complete at this point
     Write-Host "`t Configuring Domain Controller takes a while. Please be patient"
     Assert-LabDomain
+
+    $timer = Get-Date
+    "Initializing non-Domain controller VMs: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
 
     #Note: We've got time on our side here...Domain is being configured and reparenting is occuring which means we can get other stuff done while waiting.
     # Now start all other VMs - Don't wait for completion, but stagger startup for hosts with slow disks if the OSD is the default size (4096KB) indicating it's not started before.
@@ -401,6 +414,9 @@ Function Initialize-AzureStackHCILabOrchestration {
         }
     }
 
+    $timer = Get-Date
+    "Completed non-domain controller VMs initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+
     # Begin long-running reparent task - runs async
     $AllVMs | ForEach-Object {
         $thisVM = $_
@@ -422,8 +438,11 @@ Function Initialize-AzureStackHCILabOrchestration {
                 [Console]::WriteLine("`t Reparenting $($thisJobVM.Name) OSD to $NewBasePath")
                 $VHDXToConvert | Set-VHD -ParentPath $NewBasePath -IgnoreIdMismatch
             }
-        } | Out-Null
+        } -OutVariable +RSJob | Out-Null
     }
+
+    $timer = Get-Date
+    "Completed VHDX Reparenting: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
 
     # Cleanup VM hardware (S2D disks and NICs) and recreate (later) in case this is not the first run
     [Console]::WriteLine("Cleaning up then re-adding VM hardware in case this is not the first run")
@@ -431,6 +450,9 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     # Recreate NICs - Disks can't be done yet because adding new SCSI controllers require them to be offline
     New-AzureStackHCIVMAdapters
+
+    $timer = Get-Date
+    "Completed VMHardware removal and adapter reinitialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
 
     # Cleanup Ghosts; System must be on but will require a full shutdown (not restart) to complete the removal so don't rename NICs yet.
     Wait-ForHeartbeatState -State On -VMs $AllVMs
@@ -474,8 +496,8 @@ Function Initialize-AzureStackHCILabOrchestration {
     }
 
     # Make sure all previous jobs have completed
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
+    Wait-RSJob   $RSJob | Out-Null
+    Remove-RSJob $RSJob | Out-Null
 #endregion
 
 #region Offline VM configuration
@@ -508,11 +530,11 @@ Function Initialize-AzureStackHCILabOrchestration {
                 Add-VMHardDiskDrive -VM $thisJobVM -Path $BaseDiskPath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
             }
             Else { [Console]::WriteLine("`t $($thisJobVM.Name) VHDX has already been merged - backslash Ignore") }
-        } | Out-Null
+        } -OutVariable +RSJob | Out-Null
     }
 
-    Get-RSJob | Wait-RSJob
-    Get-RSJob | Remove-RSJob
+    Wait-RSJob   $RSJob | Out-Null
+    Remove-RSJob $RSJob | Out-Null
 #endregion
 
 #region In-guest customization
@@ -531,7 +553,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     #      e.g. Stage 1 snapshot = all features are installed; stage 3 = cluster is created
 
     # Create Default and Stage 1 Snapshots
-    New-AzureStackHCIStageSnapshot -Stage 0, 1
+    New-AzureStackHCIStageSnapshot -Stage 0, 1, 3
     Restore-AzureStackHCIStageSnapshot -Stage 0
 
     $EndTime = Get-Date
@@ -548,4 +570,7 @@ Function Initialize-AzureStackHCILabOrchestration {
 
 - Add tests, at least one machine with the role domain controller
 - at least 2 machines with the AzureStackHCI role
+
+- Stage 3 of checkpoints
+- support for existing VHD Basedisk
 #>
