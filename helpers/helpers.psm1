@@ -243,7 +243,7 @@ Function Initialize-BaseDisk {
                 New-Item -Path "$MountPath\Windows\Panther" -ItemType Directory -Force | Out-Null
                 Use-WindowsUnattend -Path $MountPath -UnattendPath $unattendfile -InformationAction SilentlyContinue
 
-                'xActiveDirectory', 'xDNSServer', 'NetworkingDSC', 'xDHCPServer', 'xPSDesiredStateConfiguration' | foreach-Object {
+                'xActiveDirectory', 'xDNSServer', 'NetworkingDSC', 'xDHCPServer' | foreach-Object {
                     $thisModule = $_
 
                     Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {

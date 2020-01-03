@@ -15,9 +15,9 @@ Function Get-AzureStackHCILabConfig {
         DomainName        = 'gotham.city'
 
         # This is the filepath to the ISO that will be used to deploy the lab VMs
-        ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
+        #ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
-        #BaseVHDX    = 'C:\DataStore\CustomVHD\BaseDisk_19540_server_serverdatacenter_en-us_vl.vhdx'
+        BaseVHDX    = 'C:\datastore\CustomVHD\19540.1000.amd64fre.rs_prerelease.191218-1507_server_serverdatacenter_en-us_vl.vhdx'
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
@@ -272,14 +272,16 @@ Function Initialize-AzureStackHCILabOrchestration {
         $destPath = "C:\Program Files\WindowsPowerShell\Modules\"
 
         Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {
-            Copy-Item -Path $using:path -Recurse -Destination $using:destPath -Force
+            Copy-Item -Path $using:path -Recurse -Destination "$($using:destPath)\$thisModule" -Container -ErrorAction SilentlyContinue | Out-Null
         } -OutVariable +RSJob | Out-Null
-
-        Import-Module -Name $thisModule -Force -Global -ErrorAction SilentlyContinue
     }
 
     Wait-RSJob   $RSJob | Out-Null
     Remove-RSJob $RSJob | Out-Null
+
+    Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" -Exclude PoshRSJob | foreach-Object {
+            Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
+    }
 #endregion
 
     $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
@@ -288,33 +290,33 @@ Function Initialize-AzureStackHCILabOrchestration {
     $global:LabConfig = Get-AzureStackHCILabConfig
 
     $timer = Get-Date
-    "Beginning Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Beginning Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
     # Check that the host is ready with approve host state
     Approve-AzureStackHCILabState -Test Host
 
     $timer = Get-Date
-    "Completed Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Completed Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 #region BaseDisk and VM Create
     # Hydrate base disk - this is long and painful...
     if ($LabConfig.ServerISO) {
         New-BaseDisk
 
         $timer = Get-Date
-        "Completed base disk creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+        "Completed base disk creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
     }
 
     # Update BaseDisk with buildData
     Initialize-BaseDisk
 
     $timer = Get-Date
-    "Completed base disk initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Completed base disk initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
     # Create Virtual Machines
     Add-LabVirtualMachines
     $global:AllVMs, $global:AzureStackHCIVMs = Get-LabVMs
 
     $timer = Get-Date
-    "Completed VM Creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Completed VM Creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 #endregion
 
 #region VM Startup
@@ -326,7 +328,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     Reset-AzStackVMs -Start -VMs $DC -Wait
 
     $timer = Get-Date
-    "Completed Domain Controller VM initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Completed Domain Controller VM initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
     #Note: Unattend file renames the VM on first startup; now we need to ensure that the machine has been rebooted prior to beginning DC Promotion
     Write-Host 'Renaming Host and Prepping for DC Promotion'
@@ -373,19 +375,19 @@ Function Initialize-AzureStackHCILabOrchestration {
     } Until (($BuildDataExists -eq $true) -and ($RebootIsNeeded -eq $false))
 
     $timer = Get-Date
-    "Completed Domain Controller rename, reboot, scheduled tasks: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Completed Domain Controller rename, reboot, scheduled tasks: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 #endregion
 
 #region Domain Creation and VM online customization
 
     $timer = Get-Date
-    "Initializing domain creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Initializing domain creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
     # This runs asynchronously as nothing depends on this being complete at this point
     Write-Host "`t Configuring Domain Controller takes a while. Please be patient"
     Assert-LabDomain
 
     $timer = Get-Date
-    "Initializing non-Domain controller VMs: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Initializing non-Domain controller VMs: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
     #Note: We've got time on our side here...Domain is being configured and reparenting is occuring which means we can get other stuff done while waiting.
     # Now start all other VMs - Don't wait for completion, but stagger startup for hosts with slow disks if the OSD is the default size (4096KB) indicating it's not started before.
@@ -415,7 +417,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     }
 
     $timer = Get-Date
-    "Completed non-domain controller VMs initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Completed non-domain controller VMs initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
     # Begin long-running reparent task - runs async
     $AllVMs | ForEach-Object {
@@ -442,7 +444,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     }
 
     $timer = Get-Date
-    "Completed VHDX Reparenting: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Completed VHDX Reparenting: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
     # Cleanup VM hardware (S2D disks and NICs) and recreate (later) in case this is not the first run
     [Console]::WriteLine("Cleaning up then re-adding VM hardware in case this is not the first run")
@@ -452,7 +454,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     New-AzureStackHCIVMAdapters
 
     $timer = Get-Date
-    "Completed VMHardware removal and adapter reinitialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname
+    "Completed VMHardware removal and adapter reinitialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
     # Cleanup Ghosts; System must be on but will require a full shutdown (not restart) to complete the removal so don't rename NICs yet.
     Wait-ForHeartbeatState -State On -VMs $AllVMs

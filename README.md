@@ -11,6 +11,8 @@ For more details on what this does, please see [What it does in a little more de
 
 The latest version added:
 
+- You can now provide a VHDX or an ISO to base VMs off of. VHDX greatly speeds up the lab deployment time as hyrdration from an ISO is one of the longest tasks.
+
 - Parallelization for several tasks that applied to all VMs or the Azure Stack HCI VMs
 
 - Checkpoints that let you accelerate the deployment phases (Currently stage 0 and 1 only)
@@ -25,15 +27,19 @@ The latest version added:
 
 # Getting Started
 
-By default you must update **one** value to run the module.
+By default, you must provide a ISO or a VHDX which will be used to install VMs. You need to provide only one these and update that **one** value to create the lab.
 
 1. Open ****.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1****
 
-2. In the `Get-AzureStackHCILabConfig` function, edit the `ServerISO` property
+2. In the `Get-AzureStackHCILabConfig` function, edit either the `ServerISO` or the `BaseVHDX` property.
 
-    a. This is the path to a Windows ISO file used to create the base (parent) disk
+    a. The other property should be commented out with a `#`
 
-    b. You can use existing VMs rather than create your own however you still need to give a path to an ISO file. Instructions for using your own VMs are out of scope.
+        1. `ServerISO` This is the path to a Windows ISO file used to create the base (parent) disk
+
+        2. `BaseVHDX` This is a VHDX with a Windows OS image installed
+
+    b. You can use existing VMs rather than create your own however you still need to provide either the `ServerISO` or the `BaseVHDX` file path. Instructions for using your own VMs are out of scope.
 
 3. Run `Initialize-AzureStackHCILabOrchestration`
 
