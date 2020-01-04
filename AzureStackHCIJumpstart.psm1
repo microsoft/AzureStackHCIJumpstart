@@ -58,6 +58,23 @@ Function Get-AzureStackHCILabConfig {
         VMName = 'WAC01'
         MemoryStartupBytes = 4GB
 
+        MSIInstaller = @(
+            @{ Path = 'c:\datastore\folderA' } ,
+            @{ Path = 'c:\datastore\MSIFile1.msi' }
+            # @{ Path = 'c:\datastore\MSIFile1.msi'; CustomCommands = '' }
+        )
+
+        FileCopy = @(
+            @{
+                local  = 'c:\datastore\folderA'
+                remote = 'c:\PathOnVM\folderA'
+            }
+            @{
+                local  = 'c:\datastore\abc.txt'
+                remote = 'c:\xyz\abc.txt'
+            }
+        )
+
         # This should always be WAC
         Role = 'WAC'
     }
@@ -90,6 +107,7 @@ Function Remove-AzureStackHCILabEnvironment {
     $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
     if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
 
+    if (-not ($labConfig)) { $global:LabConfig = Get-AzureStackHCILabConfig }
 
     If ($FireAndBrimstone) { Write-Host 'Fire and Brimstone was specified -- This environment will self-destruct in T-5 seconds' ; Start-Sleep -Seconds 5 }
 
@@ -105,35 +123,42 @@ Function Remove-AzureStackHCILabEnvironment {
     $AllVMs = @()
     $AzureStackHCIVMs = @()
 
-    $LabConfig.VMs | ForEach-Object {
-        $AllVMs += Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
-    }
+    $LabConfig.VMs | ForEach-Object { $AllVMs += "$($LabConfig.Prefix)$($_.VMName)" }
+    $LabConfig.VMs.Where{$_.Role -eq 'AzureStackHCI'} | ForEach-Object { $AzureStackHCIVMs += "$($LabConfig.Prefix)$($_.VMName)" }
 
-    $LabConfig.VMs.Where{$_.Role -eq 'AzureStackHCI'} | ForEach-Object {
-        $AzureStackHCIVMs += Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
-    }
+    If (-not($FireAndBrimstone)) {
+        # Removing computer objects from AD (including CNO (LabConfig.Prefix)) if Fire and Brimstone was not specified
+        $DomainController = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
+        $DCName = "$($LabConfig.Prefix)$($DomainController.VMName)"
 
-    # Removing computer objects from AD (including CNO (LabConfig.Prefix)) if Fire and Brimstone was not specified
-    $DomainController = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
-    $DCName = "$($LabConfig.Prefix)$($DomainController.VMName)"
+        $DC = Get-VM -Name $DCName -ErrorAction SilentlyContinue
 
-    $AzureStackHCIVMs.Name, $($LabConfig.Prefix) | ForEach-Object {
-        $thisVM = $_
-        Invoke-Command -VMName $DCName -Credential $VMCred -ScriptBlock {
-            #Note: Have to try/catch because remove-adcomputer won't shutup even with erroraction silentlycontinue
-            try {
-                [Console]::WriteLine("Removing $thisVM account from domain")
-                Remove-ADComputer -Identity $thisVM -Confirm:$false
+        if ($DC) {
+            Start-VM -Name $DCName -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+            Wait-ForHeartbeatState -State On -VMs $DC
+
+            #Note: AD Cmdlets don't respect normal param for ErrorAction SilentlyContinue
+            $ErrorActionPreference = 'SilentlyContinue'
+            Invoke-Command -VMName $DCName -Credential $VMCred -ScriptBlock {
+                $using:AzureStackHCIVMs | ForEach-Object {
+                    $thisVM = $_
+                    Get-ADComputer -identity $thisVM | Remove-ADObject -Recursive -Confirm:$false
+                }
+
+                # Default cluster account - Custom cluster accounts won't be removed.
+                $thisVM = $($using:LabConfig.Prefix)
+                Get-ADComputer -identity $thisVM | Remove-ADObject -Recursive -Confirm:$false
             }
-            catch { [Console]::WriteLine("`t $thisVM account was not found") }
-        } -ErrorAction SilentlyContinue
+
+            $ErrorActionPreference = 'Continue'
+        }
     }
 
-    Reset-AzStackVMs -Stop -VMs $AllVMs
+    Reset-AzStackVMs -Stop -VMs (Get-VM -Name $AllVMs -ErrorAction SilentlyContinue)
 
     If ($AzureStackHCIVMs -ne $null) {
         Write-Host "Destroying HCI VMs"
-        Remove-VM -VM $AzureStackHCIVMs                   -Force -ErrorAction SilentlyContinue
+        Remove-VM -Name $AzureStackHCIVMs                 -Force -ErrorAction SilentlyContinue
         Remove-Item -Path $AzureStackHCIVMs.Path -Recurse -Force -ErrorAction SilentlyContinue
     }
 
@@ -144,7 +169,7 @@ Function Remove-AzureStackHCILabEnvironment {
         Write-Host " - Destroying Domain Controller"
 
         If ($AllVMs -ne $null) {
-            Remove-VM -VM $AllVMs                   -Force -ErrorAction SilentlyContinue
+            Remove-VM -Name $AllVMs                   -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $AllVMs.Path -Recurse -Force -ErrorAction SilentlyContinue
         }
 
@@ -162,12 +187,196 @@ Function Remove-AzureStackHCILabEnvironment {
     Write-Host 'Clean is finished...Exiting'
 }
 
-Function Restore-AzureStackHCIStageSnapshot {
+Function New-AzureStackHCIStageSnapshot {
     param (
         [Parameter(Mandatory=$true)]
         [ValidateSet('0', '1', '3')]
+        [Int32[]] $Stage
+    )
+
+    #TODO: Need to add a test for each stage to ensure the machines are ready
+    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+    if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+    if (-not ($labConfig)) { $global:LabConfig = Get-AzureStackHCILabConfig }
+    if (-not ($here)) {
+        $here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+        $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
+        Import-Module $helperPath -Force
+    }
+
+    $global:AllVMs, $global:AzureStackHCIVMs = Get-LabVMs
+
+    Switch ($Stage) {
+        0 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Stage 0 Checkpoints" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("Verifying Starting checkpoint exists for: $($thisJobVM.Name)")
+                    If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
+                        [Console]::WriteLine("`t Creating starting checkpoint for: $($thisJobVM.Name)")
+                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Start'
+                        Start-Sleep -Seconds 5
+                    }
+                    Else { [Console]::WriteLine('Stage 0 (Start) Snapshot already exists') }
+                } -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+        }
+
+        1 {
+            [Console]::WriteLine('Applying Start Checkpoint prior to beginning Stage 1')
+            Restore-AzureStackHCIStageSnapshot -Stage 0
+
+            [Console]::WriteLine('Ensuring machines are on')
+            Reset-AzStackVMs -Start -Wait -VMs $AzureStackHCIVMs
+
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("Checking and/or Installing Stage 1 Features for: $($thisJobVM.Name)")
+                    Invoke-Command -VMName $thisJobVM.Name -Credential $using:VMCred -ScriptBlock {
+                        Install-WindowsFeature -Name 'Bitlocker', 'Data-Center-Bridging', 'Failover-Clustering', 'FS-Data-Deduplication', 'Hyper-V', 'RSAT-AD-PowerShell' -IncludeManagementTools -Restart
+                    }
+                }  -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+
+            Wait-ForHeartbeatState -State On -VMs $AzureStackHCIVMs
+
+            # This check is due to a timing issue. Some VMs may still be "Applying Computer Settings" which leads to
+            # an issue where the stage 1 snapshot is incomplete e.g. it installed failover clustering but the firewall rules aren't added
+            [Console]::WriteLine("Ensuring VMs have completed the installation")
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Verify Install Complete" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("Checking and/or Installing Stage 1 Features for: $($thisJobVM.Name)")
+                    Invoke-Command -VMName $thisJobVM.Name -Credential $using:VMCred -ScriptBlock {
+                        #Note: Check for install pending the first time, then loop till its null
+                        $InstallPending = Get-WindowsFeature | Where Installstate -eq 'InstallPending'
+
+                        While ($InstallPending -ne $Null) {
+                            $InstallPending = Get-WindowsFeature | Where Installstate -eq 'InstallPending'
+                            Start-Sleep -Seconds 3
+                        }
+                    }
+                }  -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+
+            [Console]::WriteLine("Ensuring VMs are online after installation")
+            Wait-ForHeartbeatState -State On -VMs $AzureStackHCIVMs
+
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisVM.Name)")
+                    If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete')) {
+                        [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
+                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
+                        Start-Sleep -Seconds 5
+                    }
+                    Else { [Console]::WriteLine('Stage 1 Snapshot already exists') }
+                } -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+        }
+
+        3 {
+            [Console]::WriteLine('Ensuring machines are on')
+            Reset-AzStackVMs -Start -Wait -VMs $AllVMs
+
+            # Clear-ClusterNode needs to be done prior to creating cluster. Issue experienced where each
+            # node reports: "The computer 'Name' is joined to a cluster"
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock { Clear-ClusterNode -Force }
+            }
+
+            $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
+                $thisVM = $_
+
+                [Console]::WriteLine("`t Prepping Stage 3 - Clustering")
+                [Console]::WriteLine("`t `t Running Test Cluster on: $($thisVM.Name)")
+                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock { Test-Cluster -Node $($Using:AzureStackHCIVMs.Name) -WarningAction SilentlyContinue | Out-Null }
+
+                $DomainController = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
+                $DCName = "$($LabConfig.Prefix)$($DomainController.VMName)"
+
+                $ErrorActionPreference = 'SilentlyContinue'
+                $CNOExists = Invoke-Command -VMName $DCName -Credential $VMCred -ScriptBlock {
+                    #Note: Have to try/catch because remove-adcomputer still errors if account doesn't exist even with erroraction silentlycontinue
+                    try { Remove-ADComputer -Identity "$($using:LabConfig.Prefix)" -Confirm:$false }
+                    catch { [Console]::WriteLine("`t `t CNO was not found. Continuing with cluster creation)") }
+                    finally { $CNO = Get-ADComputer -Identity "$($using:LabConfig.Prefix)" -ErrorAction SilentlyContinue }
+
+                    return $CNO
+                }
+
+                $ErrorActionPreference = 'Continue'
+                if ($CNOExists) {
+                    [Console]::WriteLine("`n `t AzStackHCI Computer account was unable to be removed and the Cluster won't be able to be created. Remove Stage 3 snapshots, troubleshoot the removal of the CNO Account and try again")
+                }
+                Else {
+                    Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+                        #Note: Once Stage 2 is configured with separate L3 adapters, you may have to come back here and ignore networks for the CAP to be built on
+                        New-Cluster -Name "$($using:LabConfig.Prefix)" -Node $($Using:AzureStackHCIVMs.Name) -Force | Out-Null
+                    }
+                }
+            }
+
+            # Need the DC now that there is an AD Object
+            $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' -or $_.Role -eq 'AzureStackHCI' } | Foreach-Object {
+                $thisVMName = "$($LabConfig.Prefix)$($_.VMName)"
+
+                [Console]::WriteLine("`t Creating Stage 3 checkpoint")
+                Start-RSJob -Name "Stage 3 Checkpoint for: $($thisVMName)" -ScriptBlock {
+                    $thisJobVM = $using:thisVMName
+
+                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 3 Complete')) {
+                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 3 Complete'
+                    }
+                } -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+        }
+    }
+}
+
+Function Restore-AzureStackHCIStageSnapshot {
+    param (
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('0', '1')]
         [Int32] $Stage
     )
+
+    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+    if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+    if (-not ($labConfig)) { $global:LabConfig = Get-AzureStackHCILabConfig }
+    if (-not ($here)) {
+        $here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+        $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
+        Import-Module $helperPath -Force
+    }
+
+    $global:AllVMs, $global:AzureStackHCIVMs = Get-LabVMs
 
     #TODO: Restore DC to stage 0 for stage 0 or 1 (includes domain join but not the cluster)
     #TODO: Restore DC to stage 3 for cluster including CNO
@@ -182,12 +391,10 @@ Function Restore-AzureStackHCIStageSnapshot {
                     Restore-VMSnapshot -Name Start -VMName $thisJobVM.Name -Confirm:$false
                 } -OutVariable +RSJob | Out-Null
             }
-
-            Wait-RSJob   $RSJob | Out-Null
-            Remove-RSJob $RSJob | Out-Null
         }
 
         1 {
+            #TODO: Where -ne to domain controller
             $AzureStackHCIVMs | ForEach-Object {
                 $thisVM = $_
                 Start-RSJob -Name "$($thisVM.Name)-Restoring starting checkpoint" -ScriptBlock {
@@ -210,16 +417,98 @@ Function Restore-AzureStackHCIStageSnapshot {
                     Restore-VMSnapshot -Name 'Start' -VMName $thisJobVM.Name -Confirm:$false
                 } -OutVariable +RSJob | Out-Null
             }
-
-            Wait-RSJob   $RSJob | Out-Null
-            Remove-RSJob $RSJob | Out-Null
         }
 
         3 {
-            #TODO: This whole thing
-            #Note: Need to restore the dc as well...
+            #TODO: Where not WAC
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Restoring Stage 3" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Restore-VMSnapshot -Name 'Stage 3 Complete' -VMName $thisJobVM.Name -Confirm:$false
+                } -OutVariable +RSJob | Out-Null
+            }
         }
     }
+
+    Wait-RSJob   $RSJob | Out-Null
+    Remove-RSJob $RSJob | Out-Null
+}
+
+Function Remove-AzureStackHCIStageSnapshot {
+    param (
+        [Parameter(Mandatory=$false)]
+        [ValidateSet('0', '1', '3')]
+        [Int32] $Stage
+    )
+
+    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+    if (-not ($isAdmin)) { Write-Error 'This must be run as an administrator - Please relaunch with administrative rights' -ErrorAction Stop }
+    if (-not ($labConfig)) { $global:LabConfig = Get-AzureStackHCILabConfig }
+    if (-not ($here)) {
+        $here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+        $helperPath = Join-Path -Path $here -ChildPath 'helpers\helpers.psm1'
+        Import-Module $helperPath -Force
+    }
+
+    $global:AllVMs, $global:AzureStackHCIVMs = Get-LabVMs
+
+    Switch ($Stage) {
+        0 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+
+                Start-RSJob -Name "$($thisVM.Name)-RemoveStage1Snapshots" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where Name -eq 'Start' | Remove-VMSnapshot -IncludeAllChildSnapshots
+                } -OutVariable +RSJob | Out-Null
+            }
+        }
+
+        1 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+
+                Start-RSJob -Name "$($thisVM.Name)-RemoveStage1Snapshots" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where Name -like 'Stage 1*' | Remove-VMSnapshot -IncludeAllChildSnapshots
+                } -OutVariable +RSJob | Out-Null
+            }
+        }
+
+        3 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+
+                Start-RSJob -Name "$($thisVM.Name)-RemoveStage1Snapshots" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where Name -like 'Stage 3*' | Remove-VMSnapshot -IncludeAllChildSnapshots
+                } -OutVariable +RSJob | Out-Null
+            }
+        }
+
+        default {
+            Write-Host 'No snapshot stage was specified. Removing all snapshots'
+            Start-Sleep -Seconds 3
+
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+
+                Start-RSJob -Name "$($thisVM.Name)-RemoveAllSnapshots" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where ParentSnapshotName -eq $null | Remove-VMSnapshot -IncludeAllChildSnapshots
+                } -OutVariable +RSJob | Out-Null
+            }
+        }
+    }
+
+    Wait-RSJob   $RSJob | Out-Null
+    Remove-RSJob $RSJob | Out-Null
 }
 
 Function Initialize-AzureStackHCILabOrchestration {
@@ -288,6 +577,8 @@ Function Initialize-AzureStackHCILabOrchestration {
     Import-Module $helperPath -Force
 
     $global:LabConfig = Get-AzureStackHCILabConfig
+
+    #TODO: If VMs already exist, return them to stage0 snapshot and delete the snapshots before continuing
 
     $timer = Get-Date
     "Beginning Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
@@ -453,6 +744,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     # Recreate NICs - Disks can't be done yet because adding new SCSI controllers require them to be offline
     New-AzureStackHCIVMAdapters
 
+    #TODO: This needs to wait as the tasks are run through RSJobs
     $timer = Get-Date
     "Completed VMHardware removal and adapter reinitialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
@@ -489,7 +781,7 @@ Function Initialize-AzureStackHCILabOrchestration {
 
                 # Join computer to domain
                 $thisDomain = $($using:LabConfig.DomainNetbiosName)
-                Add-Computer -NewName $using:thisSystem -DomainName $thisDomain -LocalCredential $Using:localCred -Credential $Using:VMCred -Force -WarningAction SilentlyContinue
+                Add-Computer -DomainName $thisDomain -LocalCredential $Using:localCred -Credential $Using:VMCred -Force -WarningAction SilentlyContinue
             }
 
             Get-NetFirewallRule -DisplayName "*File and Printer Sharing (Echo Request*In)" | Enable-NetFirewallRule
@@ -551,13 +843,6 @@ Function Initialize-AzureStackHCILabOrchestration {
     Write-Host '\\\ Completed Environment Setup  ///'
     Write-Host '/// Starting checkpoint creation \\\'
 
-    #Note: Snapshots creation and restoration are labelled by what's done,
-    #      e.g. Stage 1 snapshot = all features are installed; stage 3 = cluster is created
-
-    # Create Default and Stage 1 Snapshots
-    New-AzureStackHCIStageSnapshot -Stage 0, 1, 3
-    Restore-AzureStackHCIStageSnapshot -Stage 0
-
     $EndTime = Get-Date
     "Start Time: $StartTime"
     "End Time: $EndTime"
@@ -565,14 +850,10 @@ Function Initialize-AzureStackHCILabOrchestration {
 
 <#TODO: Cleanup todos!
 - Test that labconfig is available and not malformed
-- Support using an existing VHD. Make sure it syspreps and adds the unattend file, etc.
-
+- Add tests, at least one machine with the role domain controller
+- at least 2 machines with the AzureStackHCI role
 - only remove disks if they are greater than 4096 KB
 - Only remove NICs if list is different than config file?
 
-- Add tests, at least one machine with the role domain controller
-- at least 2 machines with the AzureStackHCI role
-
 - Stage 3 of checkpoints
-- support for existing VHD Basedisk
 #>

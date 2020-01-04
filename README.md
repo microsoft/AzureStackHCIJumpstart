@@ -15,7 +15,7 @@ The latest version added:
 
 - Parallelization for several tasks that applied to all VMs or the Azure Stack HCI VMs
 
-- Checkpoints that let you accelerate the deployment phases (Currently stage 0 and 1 only)
+- Checkpoints that let you accelerate the deployment phases *(Currently stage 0 and 1 only)
 
 - Internet access from the VMs
 

@@ -456,15 +456,15 @@ Function Add-LabVirtualMachines {
         Rename-NetAdapter -Name "*$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -NewName "NATGW-$($LabConfig.Prefix)-$($LabConfig.Switchname)"
 
         $GatewayIP = "$($LabConfig.DHCPscope.Substring(0,$LabConfig.DHCPscope.Length-1))1"
-        New-NetIPAddress -IPAddress $GatewayIP -PrefixLength 24 -InterfaceAlias "NATGW-$($LabConfig.Prefix)-$($LabConfig.Switchname)"
+        New-NetIPAddress -IPAddress $GatewayIP -PrefixLength 24 -InterfaceAlias "NATGW-$($LabConfig.Prefix)-$($LabConfig.Switchname)" | Out-Null
     }
 
     # If existing NAT is named wrong, delete then readd; else create the NAT
     $ExistingNat = Get-NetNat | Where-Object InternalIPInterfaceAddressPrefix -like "$($LabConfig.DHCPScope)*"
 
     If ($ExistingNat.Name -ne "Nat-$($LabConfig.Prefix)-$($LabConfig.Switchname)") {
-        Get-NetNat | Where InternalIPInterfaceAddressPrefix -like "$($LabConfig.DHCPScope)*" | Remove-NetNat -Confirm:$false
-        New-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.Switchname)" -InternalIPInterfaceAddressPrefix ($LabConfig.DHCPscope + "/24")
+        Get-NetNat | Where InternalIPInterfaceAddressPrefix -like "$($LabConfig.DHCPScope)*" | Remove-NetNat -Confirm:$false | Out-Null
+        New-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.Switchname)" -InternalIPInterfaceAddressPrefix ($LabConfig.DHCPscope + "/24") | Out-Null
     }
 
     $LabConfig.VMs | ForEach-Object {
@@ -549,11 +549,10 @@ Function Wait-ForAzureStackHCIDomain {
             Start-Sleep 20
         } ElseIf ($DscConfigurationStatus.status -eq "Success" -and $DscConfigurationStatus.Type -ne 'LocalConfigurationManager' ) {
             Write-Host "`t Current Domain state: $($DscConfigurationStatus.status), ResourcesNotInDesiredState: $($DscConfigurationStatus.resourcesNotInDesiredState.count), ResourcesInDesiredState: $($DscConfigurationStatus.resourcesInDesiredState.count)"
-            Write-Host "`t `t Domain $($LabConfig.DomainName) configured successfully `n"
         }
-
-        #$i++
     } until ($DscConfigurationStatus.Status -eq 'Success' -and $DscConfigurationStatus.rebootrequested -eq $false)
+
+    Write-Host "`t `t Domain $($LabConfig.DomainName) configured successfully `n"
 
     $DHCPScope = $LabConfig.DHCPscope
 
@@ -592,6 +591,8 @@ Function Remove-AzureStackHCIVMHardware {
                     Remove-VMScsiController -VMName $thisJobVM.Name -ControllerNumber 1
                 }
             }
+
+            Remove-Item -Path (Join-Path -Path $thisVM.Path -ChildPath "Virtual Hard Disks\DataDisks") -Recurse -Force
 
             [Console]::WriteLine("`t Removing virtual adapters from: $($thisJobVM.Name)")
             Get-VMNetworkAdapter -VMName $thisJobVM.Name | ForEach-Object { Remove-VMNetworkAdapter -VMName $thisJobVM.Name }
@@ -881,131 +882,24 @@ Function Register-AzureStackHCIStartupTasks {
 
         Copy-VMFile -Name $thisVM.Name -SourcePath $startupScript.FullName -DestinationPath $startupScript.FullName -CreateFullPath -FileSource Host -Force
         Invoke-Command -VMName $thisVM.Name -Credential $localCred -ScriptBlock {
+            $thisJobVM = $($using:thisVM.Name)
+
             $Action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NonInteractive -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$($using:startupScript.FullName)`""
             $Trigger   = New-ScheduledTaskTrigger -AtStartup
             $Settings  = New-ScheduledTaskSettingsSet
             $principal = New-ScheduledTaskPrincipal -LogonType S4U -UserId SYSTEM -RunLevel Highest
             $Task      = New-ScheduledTask -Action $Action -Trigger $Trigger -Settings $Settings
 
-            Register-ScheduledTask -TaskName 'Azure Stack HCI Startup settings' -Action $action -Trigger $trigger -Settings $settings -Principal $principal
+            Register-ScheduledTask -TaskName 'Azure Stack HCI Startup settings' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+            Start-ScheduledTask -TaskName 'Azure Stack HCI Startup settings'
+
+            while ((Get-ScheduledTask -TaskName 'Azure Stack HCI Startup settings').State  -ne 'Ready') {
+                [Console]::WriteLine("`t Waiting on first run of startup scheduled task for: $($thisJobVM)")
+            }
         }
     }
 }
 #endregion
 
 #region create checkpoints
-Function New-AzureStackHCIStageSnapshot {
-    param (
-        [Parameter(Mandatory=$true)]
-        [ValidateSet('0', '1', '3')]
-        [Int32[]] $Stage
-    )
-
-    Switch ($Stage) {
-        0 {
-            $AllVMs | ForEach-Object {
-                $thisVM = $_
-                Start-RSJob -Name "$($thisVM.Name)-Stage 0 Checkpoints" -ScriptBlock {
-                    $thisJobVM = $using:thisVM
-
-                    [Console]::WriteLine("Verifying Starting checkpoint exists for: $($thisJobVM.Name)")
-                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
-                        [Console]::WriteLine("`t Creating starting checkpoint for: $($thisJobVM.Name)")
-                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Start'
-                    }
-                } -OutVariable +RSJob | Out-Null
-            }
-
-            Wait-RSJob   $RSJob | Out-Null
-            Remove-RSJob $RSJob | Out-Null
-        }
-
-        1 {
-            #TODO: Apply Stage 0 checkpoint first
-            $AzureStackHCIVMs | ForEach-Object {
-                $thisVM = $_
-                Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
-                    $thisJobVM = $using:thisVM
-
-                    [Console]::WriteLine("Checking and/or Installing Stage 1 Features for: $($thisJobVM.Name)")
-                    Invoke-Command -VMName $thisJobVM.Name -Credential $using:VMCred -ScriptBlock {
-                        Install-WindowsFeature -Name 'Bitlocker', 'Data-Center-Bridging', 'Failover-Clustering', 'FS-Data-Deduplication', 'Hyper-V', 'RSAT-AD-PowerShell' -IncludeManagementTools
-                    }
-                }  -OutVariable +RSJob | Out-Null
-            }
-
-            Wait-RSJob   $RSJob | Out-Null
-            Remove-RSJob $RSJob | Out-Null
-
-            #Note: Reboot to complete the installations, then wait again in case multiple reboots occur.
-            Write-Host "Restarting VMs following feature installation for stage 1 checkpoint"
-            Reset-AzStackVMs -Restart -Wait -VMs $AzureStackHCIVMs
-            Wait-ForHeartbeatState -State On -VMs $AzureStackHCIVMs
-
-            $AzureStackHCIVMs | ForEach-Object {
-                $thisVM = $_
-                Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
-                    $thisJobVM = $using:thisVM
-
-                    [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisVM.Name)")
-                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete')) {
-                        [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
-                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
-                    }
-                } -OutVariable +RSJob | Out-Null
-            }
-
-            Wait-RSJob   $RSJob | Out-Null
-            Remove-RSJob $RSJob | Out-Null
-        }
-
-        3 {
-            $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
-                $thisVM = $_
-
-                [Console]::WriteLine("`t Preping Stage 3 - Clustering")
-                [Console]::WriteLine("`t `t Running Test Cluster on: $($thisVM.Name)")
-                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock { Test-Cluster -Node $($Using:AzureStackHCIVMs.Name) -WarningAction SilentlyContinue | Out-Null }
-
-                $DomainController = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
-                $DCName = "$($LabConfig.Prefix)$($DomainController.VMName)"
-                $CNOExists = Invoke-Command -VMName $DCName -Credential $VMCred -ScriptBlock {
-                    #Note: Have to try/catch because remove-adcomputer still errors if account doesn't exist even with erroraction silentlycontinue
-                    try { Remove-ADComputer -Identity "$($using:LabConfig.Prefix)" -Confirm:$false }
-                    catch { [Console]::WriteLine("`t `t CNO was not found. Continuing with cluster creation)") }
-                    finally { $CNO = Get-ADComputer -Identity "$($using:LabConfig.Prefix)" -ErrorAction SilentlyContinue }
-
-                    return $CNO
-                }
-
-                if ($CNOExists) {
-                    [Console]::WriteLine("`n `t AzStackHCI Computer account was unable to be removed and the Cluster won't be able to be created. Remove Stage 3 snapshots, troubleshoot the removal of the CNO Account and try again")
-                }
-                Else {
-                    Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-                        #Note: Once Stage 2 is configured with separate L3 adapters, you may have to come back here and ignore networks for the CAP to be built on
-                        New-Cluster -Name "$($using:LabConfig.Prefix)" -Node $($Using:AzureStackHCIVMs.Name) -Force | Out-Null
-                    }
-                }
-            }
-
-            # Need the DC now that there is an AD Object
-            $AllVMs.Where{$_.Role -eq 'AzureStackHCI'} ,
-            $AllVMs.Where{$_.Role -eq 'Domain Controller'} | ForEach-Object {
-                $thisVM = $_
-                Start-RSJob -Name "Stage 3 Checkpoint for: $($thisVM.Name)" -ScriptBlock {
-                    $thisJobVM = $using:thisVM
-
-                    [Console]::WriteLine("`t Creating Stage 3 checkpoint")
-                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 3 Complete')) {
-                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 3 Complete'
-                    }
-                } -OutVariable +RSJob | Out-Null
-            }
-
-            Wait-RSJob   $RSJob | Out-Null
-            Remove-RSJob $RSJob | Out-Null
-        }
-    }
-}
 #endregion
