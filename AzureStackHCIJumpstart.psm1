@@ -348,8 +348,9 @@ Function New-AzureStackHCIStageSnapshot {
 
                     return $CNO
                 }
-
                 $ErrorActionPreference = 'Continue'
+
+                #TODO: Check that the cluster was actually enabled prior to taking snapshot
                 if ($CNOExists) {
                     [Console]::WriteLine("`n `t AzStackHCI Computer account was unable to be removed and the Cluster won't be able to be created. Remove Stage 3 snapshots, troubleshoot the removal of the CNO Account and try again")
                 }
@@ -360,7 +361,7 @@ Function New-AzureStackHCIStageSnapshot {
 
                         #Note: Once Stage 2 is configured with separate L3 adapters, you may have to come back here and ignore networks for the CAP to be built on
                         $ClusterName = "$($thisLabConfig.Prefix)"
-                        New-Cluster -Name $ClusterName -Node $($theseAzureStackHCIVMs.Name) -Force
+                        New-Cluster -Name $ClusterName -Node $($theseAzureStackHCIVMs.Name) -Force | Out-Null
                     }
                 }
             }
@@ -385,77 +386,52 @@ Function New-AzureStackHCIStageSnapshot {
             Wait-RSJob   $RSJob | Out-Null
             Remove-RSJob $RSJob | Out-Null
         }
-<#
+
         4 {
             [Console]::WriteLine('Ensuring machines are on')
             Reset-AzStackVMs -Start -Wait -VMs $AllVMs
 
-            $AzureStackHCIVMs | ForEach-Object {
+            [Console]::WriteLine("`t Prepping Stage 4 - S2D")
+            $AzureStackHCIVMs | Select -First 1 | ForEach-Object {
                 $thisVM = $_
 
-                [Console]::WriteLine("`t Prepping Stage 4 - Enabling S2D")
-                [Console]::WriteLine("`t `t Cleaning disks: $($thisVM.Name)")
-
+                [Console]::WriteLine("`t `t Cleaning disks and enabling S2D")
                 Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+                    $thisLabConfig = $using:LabConfig
+
+                    Start-ClusterResource -Name 'Cluster Name' | Out-Null
+
+                    (Get-Cluster -Name $($thisLabConfig.Prefix)).BlockCacheSize = 2048
                     Update-StorageProviderCache
-                    Get-StoragePool | ? IsPrimordial -eq $false | Set-StoragePool -IsReadOnly:$false -ErrorAction SilentlyContinue
-                    Get-StoragePool | ? IsPrimordial -eq $false | Get-VirtualDisk | Remove-VirtualDisk -Confirm:$false -ErrorAction SilentlyContinue
-                    Get-StoragePool | ? IsPrimordial -eq $false | Remove-StoragePool -Confirm:$false -ErrorAction SilentlyContinue
-                    Get-PhysicalDisk | Reset-PhysicalDisk -ErrorAction SilentlyContinue
-                    Get-Disk | ? Number -ne $null | ? IsBoot -ne $true | ? IsSystem -ne $true | ? PartitionStyle -ne RAW | % {
-                        $_ | Set-Disk -isoffline:$false
-                        $_ | Set-Disk -isreadonly:$false
-                        $_ | Clear-Disk -RemoveData -RemoveOEM -Confirm:$false
-                        $_ | Set-Disk -isreadonly:$true
-                        $_ | Set-Disk -isoffline:$true
+
+                    Get-Disk | Where-Object Number -ne $null | Where-Object IsBoot -ne $true | Where-Object IsSystem -ne $true | Where-Object PartitionStyle -ne RAW | ForEach-Object {
+                        $_ | Clear-Disk -RemoveData -Confirm:$false
                     }
-                    Get-Disk | Where Number -Ne $Null | Where IsBoot -Ne $True | Where IsSystem -Ne $True | Where PartitionStyle -Eq RAW | Group -NoElement -Property FriendlyName
+
+                    Enable-ClusterStorageSpacesDirect -Confirm:$false | Out-Null
                 }
             }
 
-            $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
-                $thisVM = $_
+            #TODO: Check that S2D was actually enabled prior to taking snapshot
+            $LabConfig.VMs.Where{ $_.Role -eq 'AzureStackHCI' } | Foreach-Object {
+                $thisVMName = "$($LabConfig.Prefix)$($_.VMName)"
 
-                [Console]::WriteLine("`t Prepping Stage 3 - Clustering")
-                [Console]::WriteLine("`t `t Running Test Cluster on: $($thisVM.Name)")
-                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-                    Test-Cluster -Node $($Using:AzureStackHCIVMs.Name) -WarningAction SilentlyContinue | Out-Null
-                }
+                [Console]::WriteLine("`t Creating Stage 4 checkpoint for: $thisVMName")
+                Start-RSJob -Name "Stage 4 Checkpoint for: $($thisVMName)" -ScriptBlock {
+                    $thisJobVMName = $using:thisVMName
+
+                    If (-not (Get-VMSnapshot -VMName $thisJobVMName -Name 'Stage 4 Complete')) {
+                        [Console]::WriteLine("`t `tCreating Stage 4 checkpoint for: $($thisJobVMName)")
+                        Checkpoint-VM -Name $thisJobVMName -SnapshotName 'Stage 4 Complete'
+                        Start-Sleep -Seconds 5
+                    }
+                    Else { [Console]::WriteLine('Stage 4 Snapshot already exists') }
+                } -OutVariable +RSJob | Out-Null
             }
 
-
-$ServerList = "Server01", "Server02", "Server03", "Server04"
-
-Invoke-Command ($ServerList) {
-    Update-StorageProviderCache
-    Get-StoragePool | ? IsPrimordial -eq $false | Set-StoragePool -IsReadOnly:$false -ErrorAction SilentlyContinue
-    Get-StoragePool | ? IsPrimordial -eq $false | Get-VirtualDisk | Remove-VirtualDisk -Confirm:$false -ErrorAction SilentlyContinue
-    Get-StoragePool | ? IsPrimordial -eq $false | Remove-StoragePool -Confirm:$false -ErrorAction SilentlyContinue
-    Get-PhysicalDisk | Reset-PhysicalDisk -ErrorAction SilentlyContinue
-    Get-Disk | ? Number -ne $null | ? IsBoot -ne $true | ? IsSystem -ne $true | ? PartitionStyle -ne RAW | % {
-        $_ | Set-Disk -isoffline:$false
-        $_ | Set-Disk -isreadonly:$false
-        $_ | Clear-Disk -RemoveData -RemoveOEM -Confirm:$false
-        $_ | Set-Disk -isreadonly:$true
-        $_ | Set-Disk -isoffline:$true
-    }
-    Get-Disk | Where Number -Ne $Null | Where IsBoot -Ne $True | Where IsSystem -Ne $True | Where PartitionStyle -Eq RAW | Group -NoElement -Property FriendlyName
-} | Sort -Property PsComputerName, Count
-
-Enable-ClusterStorageSpacesDirect –CimSession <ClusterName>
-
-$ClusterName = "StorageSpacesDirect1"
-$CSVCacheSize = 2048 #Size in MB
-
-Write-Output "Setting the CSV cache..."
-(Get-Cluster $ClusterName).BlockCacheSize = $CSVCacheSize
-
-$CSVCurrentCacheSize = (Get-Cluster $ClusterName).BlockCacheSize
-Write-Output "$ClusterName CSV cache size: $CSVCurrentCacheSize MB"
-
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
         }
-
-        #>
     }
 }
 
@@ -528,17 +504,27 @@ Function Restore-AzureStackHCIStageSnapshot {
                     Restore-VMSnapshot -Name 'Stage 3 Complete' -VMName $thisJobVM.Name -Confirm:$false
                 } -OutVariable +RSJob | Out-Null
             }
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+
+            Write-Host "Starting "
+            Reset-AzStackVMs -Start -Wait -VMs $AllVMs
+
+            $AzureStackHCIVMs | Select -First 1 | ForEach-Object {
+                $thisVM = $_
+
+                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+                    Start-ClusterResource -Name 'Cluster Name' | Out-Null
+                }
+            }
         }
     }
-
-    Wait-RSJob   $RSJob | Out-Null
-    Remove-RSJob $RSJob | Out-Null
 }
 
 Function Remove-AzureStackHCIStageSnapshot {
     param (
         [Parameter(Mandatory=$false)]
-        [ValidateSet('0', '1', '3')]
+        [ValidateSet('0', '1', '3', '4')]
         [Int32] $Stage
     )
 
@@ -573,7 +559,7 @@ Function Remove-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "$($thisVM.Name)-RemoveStage1Snapshots" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
-                    Get-VMSnapshot -VMName $thisJobVM.Name | Where Name -like 'Stage 1*' | Remove-VMSnapshot -IncludeAllChildSnapshots
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where-Object Name -like 'Stage 1*' | Remove-VMSnapshot -IncludeAllChildSnapshots
                 } -OutVariable +RSJob | Out-Null
             }
         }
@@ -582,10 +568,22 @@ Function Remove-AzureStackHCIStageSnapshot {
             $AllVMs | ForEach-Object {
                 $thisVM = $_
 
-                Start-RSJob -Name "$($thisVM.Name)-RemoveStage1Snapshots" -ScriptBlock {
+                Start-RSJob -Name "$($thisVM.Name)-RemoveStage3Snapshots" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
-                    Get-VMSnapshot -VMName $thisJobVM.Name | Where Name -like 'Stage 3*' | Remove-VMSnapshot -IncludeAllChildSnapshots
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where-Object Name -like 'Stage 3*' | Remove-VMSnapshot -IncludeAllChildSnapshots
+                } -OutVariable +RSJob | Out-Null
+            }
+        }
+
+        4 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+
+                Start-RSJob -Name "$($thisVM.Name)-RemoveStage4Snapshots" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where-Object Name -like 'Stage 4*' | Remove-VMSnapshot -IncludeAllChildSnapshots
                 } -OutVariable +RSJob | Out-Null
             }
         }
@@ -714,7 +712,7 @@ Function Initialize-AzureStackHCILabOrchestration {
 
 #region VM Startup
     # Start DC only; want this to startup as quickly as possible to begin creating the long running domain
-    Write-Host "Starting DC VM"
+    Write-Host "Starting DC VM" | Out-File $logfile.fullname -Append
 
     $DCName = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
     $DC     = Get-VM -VMName "$($LabConfig.Prefix)$($DCName.VMName)" -ErrorAction SilentlyContinue
