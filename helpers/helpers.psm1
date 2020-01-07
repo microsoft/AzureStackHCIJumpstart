@@ -361,7 +361,7 @@ Function Initialize-BaseDisk {
                 IPEndRange    = ($DHCPscope + '254')
                 Name          = 'ManagementScope'
                 SubnetMask    = '255.255.255.0'
-                LeaseDuration = '00:05:00'
+                LeaseDuration = '08:00:00'
                 State         = 'Active'
                 AddressFamily = 'IPv4'
                 DependsOn = '[Service]DHCPServer'
@@ -433,7 +433,6 @@ Function Initialize-BaseDisk {
     Write-Host "`t Creating Domain Controller configuration"
     LCMConfig   -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -InformationAction SilentlyContinue | Out-Null
 
-    #TODO: Got to here last night
     DCHydration -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -domainCred $localCred -InformationAction SilentlyContinue | Out-Null
 
     If (-not (test-path "$VMPath\buildData\config\localhost.meta.mof")) { Write-Error 'Domain Controller LCM MOF creation failed' }
@@ -510,13 +509,8 @@ Function Assert-LabDomain {
 
     # Use local cred
     Invoke-Command -VMName $DCName -Credential $localCred -ScriptBlock {
-        #$InitialStatus = Get-DscConfigurationStatus -ErrorAction SilentlyContinue
-        #$LCM           = Get-DSCLocalConfigurationManager -ErrorAction SilentlyContinue
-
-        #if ($InitialStatus -eq $null -and $LCM.LCMState -eq 'Idle' ) {
-            Set-DscLocalConfigurationManager -Path "$($using:VMPath)\buildData\config"          -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
-            Start-DscConfiguration           -Path "$($using:VMPath)\buildData\config" -Verbose -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
-        #}
+        Set-DscLocalConfigurationManager -Path "$($using:VMPath)\buildData\config" -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
+        Start-DscConfiguration           -Path "$($using:VMPath)\buildData\config" -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
     }
 }
 
@@ -576,10 +570,9 @@ Function Remove-AzureStackHCIVMHardware {
         Start-RSJob -Name "$($thisVM.Name)-VMHardware Cleanup" -ScriptBlock {
             $thisJobVM = $using:thisVM
 
+            [Console]::WriteLine("`t Removing old drives from: $($thisJobVM.Name)")
             Get-VMScsiController -VMName $thisJobVM.Name | ForEach-Object {
                 $thisSCSIController = $_
-
-                [Console]::WriteLine("`t Removing old drives from: $($thisJobVM.Name)")
                 $thisSCSIController.Drives | ForEach-Object {
                     $thisVMDrive = $_
 
@@ -588,16 +581,20 @@ Function Remove-AzureStackHCIVMHardware {
 
                 if ($thisSCSIController.ControllerNumber -ne 0) {
                     [Console]::WriteLine("`t `t Removing old SCSI controllers for: $($thisJobVM.Name)")
-                    Remove-VMScsiController -VMName $thisJobVM.Name -ControllerNumber 1
+                    Remove-VMScsiController -VMName $thisJobVM.Name -ControllerNumber $thisSCSIController.ControllerNumber
                 }
             }
 
-            Remove-Item -Path (Join-Path -Path $thisVM.Path -ChildPath "Virtual Hard Disks\DataDisks") -Recurse -Force
+            Remove-Item -Path (Join-Path -Path $thisJobVM.Path -ChildPath "Virtual Hard Disks\DataDisks") -Recurse -Force
 
             [Console]::WriteLine("`t Removing virtual adapters from: $($thisJobVM.Name)")
             Get-VMNetworkAdapter -VMName $thisJobVM.Name | ForEach-Object { Remove-VMNetworkAdapter -VMName $thisJobVM.Name }
         } -OutVariable +RSJob | Out-Null
     }
+
+    # Make sure all previous jobs have completed
+    Wait-RSJob   $RSJob | Out-Null
+    Remove-RSJob $RSJob | Out-Null
 }
 
 # Create and attach new drives; then adapters
@@ -605,6 +602,7 @@ Function New-AzureStackHCIVMS2DDisks {
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
 
+        #Note: This does not remove existing VMHardware. To remove/destroy (disks) first run Remove-AzureStackHCIVMS2DDisks
         Start-RSJob -Name "$($thisVM.Name)-CreateAndAttachDisks" -ScriptBlock {
             $thisJobVM = $using:thisVM
 
@@ -613,14 +611,9 @@ Function New-AzureStackHCIVMS2DDisks {
             [Console]::WriteLine("`t Creating SCSI Controllers for $($thisJobVM.Name)")
             1..3 | Foreach-Object { Add-VMScsiController -VMName $thisJobVM.Name -ErrorAction SilentlyContinue }
 
-            # Remove all the old drives and recreate. Simpler than checking that each disk hasn't been used.
-            #Note: This may not work once the checkpoints are introduced.
-            $thisVMPath = Join-path $thisJobVM.Path 'Virtual Hard Disks\DataDisks'
-            Remove-Item -Path $thisVMPath -Recurse -Force -ErrorAction SilentlyContinue
-
-            $SCMPath = New-Item -Path (Join-Path $thisVMPath 'SCM') -ItemType Directory -Force
-            $SSDPath = New-Item -Path (Join-Path $thisVMPath 'SSD') -ItemType Directory -Force
-            $HDDPath = New-Item -Path (Join-Path $thisVMPath 'HDD') -ItemType Directory -Force
+            $SCMPath = New-Item -Path (Join-Path $thisJobVM.Path 'SCM') -ItemType Directory -Force
+            $SSDPath = New-Item -Path (Join-Path $thisJobVM.Path 'SSD') -ItemType Directory -Force
+            $HDDPath = New-Item -Path (Join-Path $thisJobVM.Path 'HDD') -ItemType Directory -Force
 
             $thisJobLabConfig = $using:LabConfig
             $theseSCMDrives   = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.SCMDrives
@@ -744,7 +737,7 @@ Function New-AzureStackHCIVMAdapters {
 }
 
 Function Set-AzureStackHCIVMAdapters {
-        #TODO: This is a monstrosity and needs to be moved to helpers...
+
     #TODO: Also update this to allow labconfig to specify
     # Rename Adapters inside guest
     $AzureStackHCIVMs | ForEach-Object {
@@ -834,6 +827,7 @@ Function Register-AzureStackHCIStartupTasks {
 
     $VMs | ForEach-Object {
         $thisVM = $_
+        [Console]::WriteLine("`t Registering startup tasks on $($thisVM.Name)")
 
         New-Item "$VMPath\buildData\logon\$($thisVM.Name)-logon.ps1" -type File -Force -OutVariable startupScript | Out-Null
 
@@ -844,7 +838,7 @@ Function Register-AzureStackHCIStartupTasks {
             `$vmName = (Get-ItemProperty -path "HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters").VirtualMachineName
             `$vmName = [Regex]::Replace(`$vmName,"\W","_")
             `$vmName = `$vmName.Substring(0,[System.Math]::Min(15, `$vmName.Length))
-            if (`$env:computername -ne `$vmName) { Rename-Computer -NewName `$vmName}
+            if (`$env:computername -ne `$vmName) { Rename-Computer -NewName `$vmName -ErrorAction SilentlyContinue}
 
             # Modify BCD to reduce recovery "help". We want the systems to start as fast as possible if they can. if they can't well just destroy and recreate.
             bcdedit /ems off
@@ -864,17 +858,41 @@ Function Register-AzureStackHCIStartupTasks {
             $theseSSDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives.Size
             $theseHDDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives.Size
 
+            # Disk objectIDs can change. Before clustering, they will be based on the computername.
+            # After clustering, they'll be based on the cluster name, so including both
             $diskContent = @"
-                Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
-                    Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName "`$(`$env:COMPUTERNAME)-PMEM`$(`$_.DeviceID)" -MediaType SCM
+                try {
+                    `$ClusterName = (Get-Cluster -ErrorAction SilentlyContinue).Name
                 }
+                catch { }
 
-                Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
-                    Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-SSD`$(`$_.DeviceID)" -MediaType SSD
-                }`
 
-                Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
-                    Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-HDD`$(`$_.DeviceID)" -MediaType HDD
+                if (`$ClusterName) {
+                    Get-Disk | Where Number -ne `$null | Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$ClusterName) | Where-Object Size -eq $theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
+                        Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName "`$(`$env:COMPUTERNAME)-PMEM`$(`$_.DeviceID)" -MediaType SCM
+                    }
+
+                    Get-Disk | Where Number -ne `$null | Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$ClusterName) | Where-Object Size -eq $theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
+                        Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-SSD`$(`$_.DeviceID)" -MediaType SSD
+                    }`
+
+                    Get-Disk | Where Number -ne `$null | Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$ClusterName) | Where-Object Size -eq $theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
+                        Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-HDD`$(`$_.DeviceID)" -MediaType HDD
+                    }
+
+                }
+                Else {
+                    Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
+                        Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName "`$(`$env:COMPUTERNAME)-PMEM`$(`$_.DeviceID)" -MediaType SCM
+                    }
+
+                    Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
+                        Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-SSD`$(`$_.DeviceID)" -MediaType SSD
+                    }`
+
+                    Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
+                        Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-HDD`$(`$_.DeviceID)" -MediaType HDD
+                    }
                 }
 "@
             Add-Content -Path $startupScript -value $diskContent

@@ -134,9 +134,13 @@ Function Remove-AzureStackHCILabEnvironment {
         $DC = Get-VM -Name $DCName -ErrorAction SilentlyContinue
 
         if ($DC) {
+            Write-Host "Starting Domain Controller to remove computer accounts"
             Start-VM -Name $DCName -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
             Wait-ForHeartbeatState -State On -VMs $DC
 
+            #TODO: restore to stage 0 snapshot if available and delete stage 3 snapshot
+
+            #TODO: Troubleshoot "Attempting to perform the InitializeDefaultDrives operation on the 'ActiveDirectory' provider failed."
             #Note: AD Cmdlets don't respect normal param for ErrorAction SilentlyContinue
             $ErrorActionPreference = 'SilentlyContinue'
             Invoke-Command -VMName $DCName -Credential $VMCred -ScriptBlock {
@@ -154,11 +158,22 @@ Function Remove-AzureStackHCILabEnvironment {
         }
     }
 
-    Reset-AzStackVMs -Stop -VMs (Get-VM -Name $AllVMs -ErrorAction SilentlyContinue)
+    # This switch to the VM Object is ugly and should change.
+    $AzureStackHCIVMs = Get-VM $AzureStackHCIVMs -ErrorAction SilentlyContinue
+    $AllVMs = Get-VM -Name $AllVMs -ErrorAction SilentlyContinue
+
+    Reset-AzStackVMs -Stop -VMs $AllVMs
 
     If ($AzureStackHCIVMs -ne $null) {
         Write-Host "Destroying HCI VMs"
-        Remove-VM -Name $AzureStackHCIVMs                 -Force -ErrorAction SilentlyContinue
+
+        Write-Host "`t Checking for and removing snapshots"
+        Get-VMSnapshot -VMName $AzureStackHCIVMs.Name -ErrorAction SilentlyContinue | Remove-VMSnapshot -ErrorAction SilentlyContinue
+
+        Write-Host "`t Checking for and removing VMs"
+        Remove-VM -Name $AzureStackHCIVMs.Name                 -Force -ErrorAction SilentlyContinue
+
+        Write-Host "`t Cleaning up VM storage"
         Remove-Item -Path $AzureStackHCIVMs.Path -Recurse -Force -ErrorAction SilentlyContinue
     }
 
@@ -169,7 +184,7 @@ Function Remove-AzureStackHCILabEnvironment {
         Write-Host " - Destroying Domain Controller"
 
         If ($AllVMs -ne $null) {
-            Remove-VM -Name $AllVMs                   -Force -ErrorAction SilentlyContinue
+            Remove-VM -Name $AllVMs.Name                   -Force -ErrorAction SilentlyContinue
             Remove-Item -Path $AllVMs.Path -Recurse -Force -ErrorAction SilentlyContinue
         }
 
@@ -190,7 +205,7 @@ Function Remove-AzureStackHCILabEnvironment {
 Function New-AzureStackHCIStageSnapshot {
     param (
         [Parameter(Mandatory=$true)]
-        [ValidateSet('0', '1', '3')]
+        [ValidateSet('0', '1', '3', '4')]
         [Int32[]] $Stage
     )
 
@@ -215,19 +230,22 @@ Function New-AzureStackHCIStageSnapshot {
 
                     [Console]::WriteLine("Verifying Starting checkpoint exists for: $($thisJobVM.Name)")
                     If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
-                        [Console]::WriteLine("`t Creating starting checkpoint for: $($thisJobVM.Name)")
+                        [Console]::WriteLine("`tCreating starting checkpoint for: $($thisJobVM.Name)")
                         Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Start'
-                        Start-Sleep -Seconds 5
                     }
-                    Else { [Console]::WriteLine('Stage 0 (Start) Snapshot already exists') }
+                    Else { [Console]::WriteLine('Stage 0 (Start) Snapshot already exists for: $($thisJobVM.Name)') }
                 } -OutVariable +RSJob | Out-Null
             }
 
             Wait-RSJob   $RSJob | Out-Null
             Remove-RSJob $RSJob | Out-Null
+
+            # Inserting sleep due to race - Checkpoints report complete before they actually are.
+            Start-Sleep -Seconds 5
         }
 
         1 {
+            #TODO: Don't allow stage 1 without taking stage 0
             [Console]::WriteLine('Applying Start Checkpoint prior to beginning Stage 1')
             Restore-AzureStackHCIStageSnapshot -Stage 0
 
@@ -259,14 +277,14 @@ Function New-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "$($thisVM.Name)-Verify Install Complete" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
-                    [Console]::WriteLine("Checking and/or Installing Stage 1 Features for: $($thisJobVM.Name)")
+                    [Console]::WriteLine("Checking Stage 1 pending features for: $($thisJobVM.Name)")
                     Invoke-Command -VMName $thisJobVM.Name -Credential $using:VMCred -ScriptBlock {
                         #Note: Check for install pending the first time, then loop till its null
                         $InstallPending = Get-WindowsFeature | Where Installstate -eq 'InstallPending'
 
                         While ($InstallPending -ne $Null) {
                             $InstallPending = Get-WindowsFeature | Where Installstate -eq 'InstallPending'
-                            Start-Sleep -Seconds 3
+                            Start-Sleep -Seconds 5
                         }
                     }
                 }  -OutVariable +RSJob | Out-Null
@@ -287,7 +305,6 @@ Function New-AzureStackHCIStageSnapshot {
                     If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete')) {
                         [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
                         Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
-                        Start-Sleep -Seconds 5
                     }
                     Else { [Console]::WriteLine('Stage 1 Snapshot already exists') }
                 } -OutVariable +RSJob | Out-Null
@@ -295,11 +312,15 @@ Function New-AzureStackHCIStageSnapshot {
 
             Wait-RSJob   $RSJob | Out-Null
             Remove-RSJob $RSJob | Out-Null
+
+            # Inserting sleep due to race - Checkpoints report complete before they actually are.
+            Start-Sleep -Seconds 5
         }
 
         3 {
             [Console]::WriteLine('Ensuring machines are on')
-            Reset-AzStackVMs -Start -Wait -VMs $AllVMs
+            $LabConfig.VMs.Where{$_.Role -eq 'WAC'} | ForEach-Object { $WACVMName += "$($LabConfig.Prefix)$($_.VMName)" }
+            Reset-AzStackVMs -Start -Wait -VMs $AllVMs.Where{$_.Name -ne $WACVMName}
 
             # Clear-ClusterNode needs to be done prior to creating cluster. Issue experienced where each
             # node reports: "The computer 'Name' is joined to a cluster"
@@ -334,8 +355,12 @@ Function New-AzureStackHCIStageSnapshot {
                 }
                 Else {
                     Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+                        $thisLabConfig = $using:LabConfig
+                        $theseAzureStackHCIVMs = $using:AzureStackHCIVMs
+
                         #Note: Once Stage 2 is configured with separate L3 adapters, you may have to come back here and ignore networks for the CAP to be built on
-                        New-Cluster -Name "$($using:LabConfig.Prefix)" -Node $($Using:AzureStackHCIVMs.Name) -Force | Out-Null
+                        $ClusterName = "$($thisLabConfig.Prefix)"
+                        New-Cluster -Name $ClusterName -Node $($theseAzureStackHCIVMs.Name) -Force
                     }
                 }
             }
@@ -344,26 +369,100 @@ Function New-AzureStackHCIStageSnapshot {
             $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' -or $_.Role -eq 'AzureStackHCI' } | Foreach-Object {
                 $thisVMName = "$($LabConfig.Prefix)$($_.VMName)"
 
-                [Console]::WriteLine("`t Creating Stage 3 checkpoint")
+                [Console]::WriteLine("`t Creating Stage 3 checkpoint for: $thisVMName")
                 Start-RSJob -Name "Stage 3 Checkpoint for: $($thisVMName)" -ScriptBlock {
-                    $thisJobVM = $using:thisVMName
+                    $thisJobVMName = $using:thisVMName
 
-                    While (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 3 Complete')) {
-                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 3 Complete'
+                    If (-not (Get-VMSnapshot -VMName $thisJobVMName -Name 'Stage 3 Complete')) {
+                        [Console]::WriteLine("`t `tCreating Stage 3 checkpoint for: $($thisJobVMName)")
+                        Checkpoint-VM -Name $thisJobVMName -SnapshotName 'Stage 3 Complete'
+                        Start-Sleep -Seconds 5
                     }
+                    Else { [Console]::WriteLine('Stage 3 Snapshot already exists') }
                 } -OutVariable +RSJob | Out-Null
             }
 
             Wait-RSJob   $RSJob | Out-Null
             Remove-RSJob $RSJob | Out-Null
         }
+<#
+        4 {
+            [Console]::WriteLine('Ensuring machines are on')
+            Reset-AzStackVMs -Start -Wait -VMs $AllVMs
+
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+
+                [Console]::WriteLine("`t Prepping Stage 4 - Enabling S2D")
+                [Console]::WriteLine("`t `t Cleaning disks: $($thisVM.Name)")
+
+                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+                    Update-StorageProviderCache
+                    Get-StoragePool | ? IsPrimordial -eq $false | Set-StoragePool -IsReadOnly:$false -ErrorAction SilentlyContinue
+                    Get-StoragePool | ? IsPrimordial -eq $false | Get-VirtualDisk | Remove-VirtualDisk -Confirm:$false -ErrorAction SilentlyContinue
+                    Get-StoragePool | ? IsPrimordial -eq $false | Remove-StoragePool -Confirm:$false -ErrorAction SilentlyContinue
+                    Get-PhysicalDisk | Reset-PhysicalDisk -ErrorAction SilentlyContinue
+                    Get-Disk | ? Number -ne $null | ? IsBoot -ne $true | ? IsSystem -ne $true | ? PartitionStyle -ne RAW | % {
+                        $_ | Set-Disk -isoffline:$false
+                        $_ | Set-Disk -isreadonly:$false
+                        $_ | Clear-Disk -RemoveData -RemoveOEM -Confirm:$false
+                        $_ | Set-Disk -isreadonly:$true
+                        $_ | Set-Disk -isoffline:$true
+                    }
+                    Get-Disk | Where Number -Ne $Null | Where IsBoot -Ne $True | Where IsSystem -Ne $True | Where PartitionStyle -Eq RAW | Group -NoElement -Property FriendlyName
+                }
+            }
+
+            $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
+                $thisVM = $_
+
+                [Console]::WriteLine("`t Prepping Stage 3 - Clustering")
+                [Console]::WriteLine("`t `t Running Test Cluster on: $($thisVM.Name)")
+                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+                    Test-Cluster -Node $($Using:AzureStackHCIVMs.Name) -WarningAction SilentlyContinue | Out-Null
+                }
+            }
+
+
+$ServerList = "Server01", "Server02", "Server03", "Server04"
+
+Invoke-Command ($ServerList) {
+    Update-StorageProviderCache
+    Get-StoragePool | ? IsPrimordial -eq $false | Set-StoragePool -IsReadOnly:$false -ErrorAction SilentlyContinue
+    Get-StoragePool | ? IsPrimordial -eq $false | Get-VirtualDisk | Remove-VirtualDisk -Confirm:$false -ErrorAction SilentlyContinue
+    Get-StoragePool | ? IsPrimordial -eq $false | Remove-StoragePool -Confirm:$false -ErrorAction SilentlyContinue
+    Get-PhysicalDisk | Reset-PhysicalDisk -ErrorAction SilentlyContinue
+    Get-Disk | ? Number -ne $null | ? IsBoot -ne $true | ? IsSystem -ne $true | ? PartitionStyle -ne RAW | % {
+        $_ | Set-Disk -isoffline:$false
+        $_ | Set-Disk -isreadonly:$false
+        $_ | Clear-Disk -RemoveData -RemoveOEM -Confirm:$false
+        $_ | Set-Disk -isreadonly:$true
+        $_ | Set-Disk -isoffline:$true
+    }
+    Get-Disk | Where Number -Ne $Null | Where IsBoot -Ne $True | Where IsSystem -Ne $True | Where PartitionStyle -Eq RAW | Group -NoElement -Property FriendlyName
+} | Sort -Property PsComputerName, Count
+
+Enable-ClusterStorageSpacesDirect –CimSession <ClusterName>
+
+$ClusterName = "StorageSpacesDirect1"
+$CSVCacheSize = 2048 #Size in MB
+
+Write-Output "Setting the CSV cache..."
+(Get-Cluster $ClusterName).BlockCacheSize = $CSVCacheSize
+
+$CSVCurrentCacheSize = (Get-Cluster $ClusterName).BlockCacheSize
+Write-Output "$ClusterName CSV cache size: $CSVCurrentCacheSize MB"
+
+        }
+
+        #>
     }
 }
 
 Function Restore-AzureStackHCIStageSnapshot {
     param (
         [Parameter(Mandatory=$true)]
-        [ValidateSet('0', '1')]
+        [ValidateSet('0', '1', '3')]
         [Int32] $Stage
     )
 
@@ -555,13 +654,16 @@ Function Initialize-AzureStackHCILabOrchestration {
     Copy-Item -Path "$here\helpers\ModulesTillPublishedonGallery\PoshRSJob" -Recurse -Destination "C:\Program Files\WindowsPowerShell\Modules\PoshRSJob" -Container -ErrorAction SilentlyContinue | Out-Null
     Import-Module -Name PoshRSJob -Force -Global -ErrorAction SilentlyContinue
 
+    # If there were prior RSJobs, remove them
+    Get-RSJob | Remove-RSJob
+
     Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" -Exclude PoshRSJob | foreach-Object {
         $thisModule = $_
         $path = $_.FullName
         $destPath = "C:\Program Files\WindowsPowerShell\Modules\"
 
-        Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {
-            Copy-Item -Path $using:path -Recurse -Destination "$($using:destPath)\$thisModule" -Container -ErrorAction SilentlyContinue | Out-Null
+        Start-RSJob -Name "$($thisModule.Name)-Modules" -ScriptBlock {
+            Copy-Item -Path $using:path -Recurse -Destination "$($using:destPath)\$($thisModule.Name)" -Container -ErrorAction SilentlyContinue | Out-Null
         } -OutVariable +RSJob | Out-Null
     }
 
@@ -665,6 +767,8 @@ Function Initialize-AzureStackHCILabOrchestration {
         if ($RebootIsNeeded) { Reset-AzStackVMs -VMs $DC -Restart -Wait }
     } Until (($BuildDataExists -eq $true) -and ($RebootIsNeeded -eq $false))
 
+    Remove-Variable RebootIsNeeded
+
     $timer = Get-Date
     "Completed Domain Controller rename, reboot, scheduled tasks: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 #endregion
@@ -693,7 +797,6 @@ Function Initialize-AzureStackHCILabOrchestration {
             If this is the first startup, this delay will let each individual VM startup faster since there will likely be less disk churn
             In testing this allowed startup to occur much more rapidly and on low memory machines, allows dynamic memory to reclaim memory #>
 
-        #Note: Don't open the console until a desktop is seen. On first logon, a bunch of things happen. If you open before that, it won't occur
         Write-host "`t Starting VM $($thisVM.Name)"
         Reset-AzStackVMs -Start -VMs $thisVM
 
@@ -750,28 +853,84 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     # Cleanup Ghosts; System must be on but will require a full shutdown (not restart) to complete the removal so don't rename NICs yet.
     Wait-ForHeartbeatState -State On -VMs $AllVMs
+
+    Write-Host "`t Registering Startup Tasks"
     Register-AzureStackHCIStartupTasks -VMs $AllVMs.Where{$_.Name -ne $DC.Name}
 
-    $AzureStackHCIVMs | ForEach-Object {
-        $thisVM = $_
+    $LabConfig.VMs.Where{ $_.Role -ne 'Domain Controller' } | Foreach-Object {
+        $thisVMName = "$($LabConfig.Prefix)$($_.VMName)"
 
-        Write-Host "`t Removing any Ghost NICs in $($thisVM.Name)"
-        Invoke-Command -VMName $thisVM.Name -Credential $localCred -ScriptBlock {
+        Write-Host "`t Removing any Ghost NICs in $($thisVMName) and enabling firewall rules (SMB-in and Echo-in)"
+        Invoke-Command -VMName $thisVMName -Credential $localCred -ScriptBlock {
             $ghosts = Get-PnpDevice -class net | Where-Object Status -eq Unknown | Select-Object FriendlyName,InstanceId
 
             ForEach ($ghost in $ghosts) {
                 $RemoveKey = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($ghost.InstanceId)"
                 Get-Item $RemoveKey | Select-Object -ExpandProperty Property | Foreach-Object { Remove-ItemProperty -Path $RemoveKey -Name $_ }
             }
+
+            Get-NetFirewallRule -DisplayName "*File and Printer Sharing (Echo Request*In)" | Enable-NetFirewallRule
+            Get-NetFirewallRule -DisplayName "File and Printer Sharing (SMB-In)" | Enable-NetFirewallRule
         }
+    }
+
+    # Make sure all previous jobs have completed
+    Wait-RSJob   $RSJob | Out-Null
+    Remove-RSJob $RSJob | Out-Null
+
+    # Rename host requires reboot
+    $AllVMs.Where{$_.Role -ne 'Domain Controller'} | Foreach-Object {
+        $thisVM = $_
+        $RebootIsNeeded = Invoke-Command -VMName $thisVM.Name -Credential $localCred -ScriptBlock {
+            if ($env:COMPUTERNAME -ne $using:thisVM.Name) {
+                Rename-Computer -NewName $($using:thisVM.Name) -Force
+                return $true
+            }
+            Else { return $false }
+        }
+
+        if ($RebootIsNeeded) { Reset-AzStackVMs -Restart -Wait -VMs $thisVM }
     }
 
     Wait-ForAzureStackHCIDomain
 
-    # Join lab VMs to domain and enable firewall rules
+    $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' } | Foreach-Object {
+        $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
+
+        $ErrorActionPreference = 'SilentlyContinue'
+        Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
+            $thisLabConfig = $using:LabConfig
+
+            Set-DnsServerPrimaryZone -Name "$($LabConfig.DomainName)" -DynamicUpdate "NonsecureAndSecure"
+
+            $thisLabConfig.VMs.Where{ $_.Role -ne 'Domain Controller'} | ForEach-Object {
+                $thisVM = "$($thisLabConfig.Prefix)$($_.VMName)"
+
+                # This will be blank if the system is not already renamed
+                $thisVMComputerSystem = Get-CimInstance -CimSession $thisVM -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
+
+                # If the machine is part of the domain and named properly, leave the account alone
+                # If the machine is not part of the domain, remove any existing accounts that match the name as this will prevent domain join: the account already exists
+                if ($thisVMComputerSystem.PartOfDomain -ne $true) {
+                    Get-ADObject -Filter {Name -eq $thisVM} | Remove-ADObject -Recursive -Confirm:$false
+                }
+            }
+
+            $ClusterNameIsOnline = Test-NetConnection $($thisLabConfig.Prefix) -InformationLevel Quiet -WarningAction SilentlyContinue
+
+            if ($ClusterNameIsOnline -eq $false) {
+                $CNOName = $($thisLabConfig.Prefix)
+                Get-ADObject -Filter {Name -eq $CNOName} | Remove-ADObject -Recursive -Confirm:$false
+            }
+        }
+
+        $ErrorActionPreference = 'Continue'
+    }
+
+    # Join lab VMs to domain
     $LabConfig.VMs.Where{ $_.Role -ne 'Domain Controller' } | Foreach-Object {
         $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
-        Write-Host "Joining $thisSystem to domain and enabling firewall rules (SMB-in and Echo-in)"
+        Write-Host "Joining $thisSystem to domain"
 
         Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
             if (-not (Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain) {
@@ -779,13 +938,10 @@ Function Initialize-AzureStackHCILabOrchestration {
                 ipconfig /release | Out-Null
                 ipconfig /renew   | Out-Null
 
-                # Join computer to domain
+                # Join computer to domain - Proper name must already be set
                 $thisDomain = $($using:LabConfig.DomainNetbiosName)
                 Add-Computer -DomainName $thisDomain -LocalCredential $Using:localCred -Credential $Using:VMCred -Force -WarningAction SilentlyContinue
             }
-
-            Get-NetFirewallRule -DisplayName "*File and Printer Sharing (Echo Request*In)" | Enable-NetFirewallRule
-            Get-NetFirewallRule -DisplayName "File and Printer Sharing (SMB-In)" | Enable-NetFirewallRule
         }
     }
 
@@ -800,6 +956,10 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     # Add S2D Disks needed for lab. System must be off to add SCSI controllers
     New-AzureStackHCIVMS2DDisks
+
+    # Finish the previous job (adding disks). This occasionally interferes with the merge and its relatively quick.
+    Wait-RSJob   $RSJob | Out-Null
+    Remove-RSJob $RSJob | Out-Null
 
     # Begin Merge
     $AllVMs | ForEach-Object {
@@ -821,6 +981,9 @@ Function Initialize-AzureStackHCILabOrchestration {
 
                 Merge-VHD -Path $VHDXToConvert.Path -DestinationPath $BaseDiskPath
                 Remove-VMHardDiskDrive -VMName $thisJobVM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI
+
+                # Sporadic race...Hard to track down..Adding temporary sleep until this is identified.
+                Start-Sleep -Seconds 5
                 Add-VMHardDiskDrive -VM $thisJobVM -Path $BaseDiskPath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
             }
             Else { [Console]::WriteLine("`t $($thisJobVM.Name) VHDX has already been merged - backslash Ignore") }
@@ -855,5 +1018,6 @@ Function Initialize-AzureStackHCILabOrchestration {
 - only remove disks if they are greater than 4096 KB
 - Only remove NICs if list is different than config file?
 
-- Stage 3 of checkpoints
+- If AD Accounts already exist, the rename doesn't work...
+- Once Complete, test that VMs have correct names
 #>
