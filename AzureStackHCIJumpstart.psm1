@@ -301,7 +301,7 @@ Function New-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
-                    [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisVM.Name)")
+                    [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisJobVM.Name)")
                     If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete')) {
                         [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
                         Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
@@ -365,7 +365,7 @@ Function New-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "$($thisVM.Name)-Stage 2 Checkpoints for HCI VMs" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
-                    [Console]::WriteLine("`t Verifying Stage 2 checkpoint exists for: $($thisVM.Name)")
+                    [Console]::WriteLine("`t Verifying Stage 2 checkpoint exists for: $($thisJobVM.Name)")
                     If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 2 Complete')) {
                         [Console]::WriteLine("`t `tCreating Stage 2 checkpoint for: $($thisJobVM.Name)")
                         Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 2 Complete'
