@@ -133,6 +133,16 @@ While you can restore the snapshots manually, this ensures that all machines are
     Remove-AzureStackHCILabEnvironment -FireAndBrimstone
 ```
 
+## Troubleshooting
+
+****After the lab orchestration command completes, I see a red-error "Credential Invalid"***
+
+This indicates we were unable to log into one of the VMs and perform some work. To resolve this, try running the ```Initialize-AzureStackHCILabOrchestration``` again.
+
+If it continues and this wasn't the first time deploying the VMs (e.g. the VMs (including WAC and the DC) already existed when you ran ```Initialize-AzureStackHCILabOrchestration```), please try removing the VMs with the command ```Remove-AzureStackHCILabEnvironment -FireAndBrimstone``` then recreating the lab.
+
+If this continues to happen, please file an issue on GitHub.
+
 # What it does in a little more depth
 
 > ### Subtitle: Why does it take so long?

@@ -868,18 +868,17 @@ Function Register-AzureStackHCIStartupTasks {
 
 
                 if (`$ClusterName) {
-                    Get-Disk | Where Number -ne `$null | Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$ClusterName) | Where-Object Size -eq $theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
+                    Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$ClusterName) | Where-Object Size -eq $theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
                         Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName "`$(`$env:COMPUTERNAME)-PMEM`$(`$_.DeviceID)" -MediaType SCM
                     }
 
-                    Get-Disk | Where Number -ne `$null | Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$ClusterName) | Where-Object Size -eq $theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
+                    Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$ClusterName) | Where-Object Size -eq $theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
                         Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-SSD`$(`$_.DeviceID)" -MediaType SSD
                     }`
 
-                    Get-Disk | Where Number -ne `$null | Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$ClusterName) | Where-Object Size -eq $theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
+                    Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$ClusterName) | Where-Object Size -eq $theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
                         Set-PhysicalDisk -UniqueId `$_.UniqueID -NewFriendlyName  "`$(`$env:COMPUTERNAME)-HDD`$(`$_.DeviceID)" -MediaType HDD
                     }
-
                 }
                 Else {
                     Get-PhysicalDisk | Where-Object ObjectID -Match `$(`$env:COMPUTERNAME) | Where-Object Size -eq $theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
@@ -917,7 +916,4 @@ Function Register-AzureStackHCIStartupTasks {
         }
     }
 }
-#endregion
-
-#region create checkpoints
 #endregion

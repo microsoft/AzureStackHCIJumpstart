@@ -205,7 +205,7 @@ Function Remove-AzureStackHCILabEnvironment {
 Function New-AzureStackHCIStageSnapshot {
     param (
         [Parameter(Mandatory=$true)]
-        [ValidateSet('0', '1', '3', '4')]
+        [ValidateSet('0', '1', '2', '3', '4')]
         [Int32[]] $Stage
     )
 
@@ -317,13 +317,71 @@ Function New-AzureStackHCIStageSnapshot {
             Start-Sleep -Seconds 5
         }
 
+        2 {
+            #TODO: Don't allow stage 1 without taking stage 0
+            #[Console]::WriteLine('Applying Start Checkpoint prior to beginning Stage 1')
+            #Restore-AzureStackHCIStageSnapshot -Stage 1
+
+            #[Console]::WriteLine('Ensuring machines are on')
+            #Reset-AzStackVMs -Start -Wait -VMs $AzureStackHCIVMs
+
+            Remove-Variable IPOffset -ErrorAction SilentlyContinue
+            $HostNum = 0
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+
+                Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Remove-VMSwitch -Name * -Force -ErrorAction SilentlyContinue
+                    $DataAdapters = Get-NetAdapter | Where-Object Name -like "Ethernet*" | Sort-Object Name
+
+                    $DataAdapters | ForEach-Object {
+                        $thisDataAdapter = $_
+                        Remove-NetIPAddress -InterfaceAlias $thisDataAdapter.Name -Confirm:$false -ErrorAction SilentlyContinue
+                    }
+
+                    Remove-Variable lastOctet, subnet -ErrorAction SilentlyContinue
+                    New-VMSwitch -Name 'ComputeSwitch' -AllowManagementOS $false -NetAdapterName ($DataAdapters.Name | Select-Object -First 2)
+
+                    $subnet = 0
+                    $lastOctet = $using:HostNum + 1
+                    $DataAdapters | Select-Object -Skip 2 | ForEach-Object {
+                        $thisDataAdapter = $_
+
+                        $subnet ++
+
+                        #TODO: Move this subnet to the config file, then check that this subnet and the DHCP subnet don't conflict
+                        New-NetIPAddress -InterfaceAlias $thisDataAdapter.Name -IPAddress "192.168.$subnet.$lastOctet" | Out-Null
+                        Set-NetIPAddress -InterfaceAlias $thisDataAdapter.Name -IPAddress "192.168.$subnet.$lastOctet" -PrefixLength 24 | Out-Null
+                    }
+                }
+
+                $HostNum ++
+            }
+
+            $AzureStackHCIVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Stage 2 Checkpoints for HCI VMs" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    [Console]::WriteLine("`t Verifying Stage 2 checkpoint exists for: $($thisVM.Name)")
+                    If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 2 Complete')) {
+                        [Console]::WriteLine("`t `tCreating Stage 2 checkpoint for: $($thisJobVM.Name)")
+                        Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 2 Complete'
+                    }
+                    Else { [Console]::WriteLine('Stage 2 Snapshot already exists') }
+                } -OutVariable +RSJob | Out-Null
+            }
+        }
+
         3 {
             [Console]::WriteLine('Ensuring machines are on')
             $LabConfig.VMs.Where{$_.Role -eq 'WAC'} | ForEach-Object { $WACVMName += "$($LabConfig.Prefix)$($_.VMName)" }
             Reset-AzStackVMs -Start -Wait -VMs $AllVMs.Where{$_.Name -ne $WACVMName}
 
             # Clear-ClusterNode needs to be done prior to creating cluster. Issue experienced where each
-            # node reports: "The computer 'Name' is joined to a cluster"
+            # node reports: "The computer 'Name' is joined to a cluster" despite not being joined
             $AzureStackHCIVMs | ForEach-Object {
                 $thisVM = $_
                 Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock { Clear-ClusterNode -Force }
@@ -359,7 +417,6 @@ Function New-AzureStackHCIStageSnapshot {
                         $thisLabConfig = $using:LabConfig
                         $theseAzureStackHCIVMs = $using:AzureStackHCIVMs
 
-                        #Note: Once Stage 2 is configured with separate L3 adapters, you may have to come back here and ignore networks for the CAP to be built on
                         $ClusterName = "$($thisLabConfig.Prefix)"
                         New-Cluster -Name $ClusterName -Node $($theseAzureStackHCIVMs.Name) -Force | Out-Null
                     }
@@ -896,7 +953,7 @@ Function Initialize-AzureStackHCILabOrchestration {
         $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
 
         $ErrorActionPreference = 'SilentlyContinue'
-        Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
+        Invoke-Command -VMName $thisSystem -Credential $VMCred -ScriptBlock {
             $thisLabConfig = $using:LabConfig
 
             Set-DnsServerPrimaryZone -Name "$($LabConfig.DomainName)" -DynamicUpdate "NonsecureAndSecure"
