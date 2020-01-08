@@ -860,7 +860,7 @@ Function Initialize-AzureStackHCILabOrchestration {
             $thisVMOSDLength = 4MB
             While ($thisVMOSDLength -le 750MB) {
                 $VHDXExtension = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Extension
-                if ($VHDXExtension -ne 'avhdx') {
+                if ($VHDXExtension -ne '.avhdx') {
                     $thisVMOSDLength = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Length
                     Start-Sleep -Seconds 5
                 }
