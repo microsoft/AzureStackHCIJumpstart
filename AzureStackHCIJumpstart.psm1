@@ -843,7 +843,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     # Now start all other VMs - Don't wait for completion, but stagger startup for hosts with slow disks if the OSD is the default size (4096KB) indicating it's not started before.
     Write-Host "Starting All VMs - Will stagger if this is first startup"
 
-    $VMCounter = 0
+    $VMCounter = 1
     $AllVMs.Where{ $_.Role -ne 'Domain Controller' } | Foreach-Object {
         $thisVM = $_
         $VMCounter ++
@@ -856,11 +856,12 @@ Function Initialize-AzureStackHCILabOrchestration {
         Reset-AzStackVMs -Start -VMs $thisVM
 
         # If there are only 2 VMs left to start, just keep going...no more delays, get on with it.
-        If (($VMCounter - 2) -lt $AllVMs.Count) {
+        If (($VMCounter - 2) -le $AllVMs.Count) {
             $thisVMOSDLength = 4MB
-            While ($thisVMOSDLength -le 750MB) {
-                $VHDXExtension = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Extension
-                if ($VHDXExtension -ne '.avhdx') {
+
+            $VHDXExtension = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Extension
+            if ($VHDXExtension -ne '.avhdx') {
+                While ($thisVMOSDLength -le 750MB) {
                     $thisVMOSDLength = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Length
                     Start-Sleep -Seconds 5
                 }
@@ -1036,12 +1037,10 @@ Function Initialize-AzureStackHCILabOrchestration {
 
                 Set-ACL  -Path $BaseDiskPath -AclObject $using:BaseDiskACL
                 Set-ItemProperty -Path $BaseDiskPath -Name IsReadOnly -Value $false
-
-                Merge-VHD -Path $VHDXToConvert.Path -DestinationPath $BaseDiskPath
                 Remove-VMHardDiskDrive -VMName $thisJobVM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI
 
-                # Sporadic race...Hard to track down..Adding temporary sleep until this is identified.
-                Start-Sleep -Seconds 5
+                Merge-VHD -Path $VHDXToConvert.Path -DestinationPath $BaseDiskPath
+                Start-Sleep -Seconds 3
                 Add-VMHardDiskDrive -VM $thisJobVM -Path $BaseDiskPath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
             }
             Else { [Console]::WriteLine("`t $($thisJobVM.Name) VHDX has already been merged - backslash Ignore") }

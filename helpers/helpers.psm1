@@ -611,9 +611,9 @@ Function New-AzureStackHCIVMS2DDisks {
             [Console]::WriteLine("`t Creating SCSI Controllers for $($thisJobVM.Name)")
             1..3 | Foreach-Object { Add-VMScsiController -VMName $thisJobVM.Name -ErrorAction SilentlyContinue }
 
-            $SCMPath = New-Item -Path (Join-Path $thisJobVM.Path 'SCM') -ItemType Directory -Force
-            $SSDPath = New-Item -Path (Join-Path $thisJobVM.Path 'SSD') -ItemType Directory -Force
-            $HDDPath = New-Item -Path (Join-Path $thisJobVM.Path 'HDD') -ItemType Directory -Force
+            $SCMPath = New-Item -Path (Join-Path $thisJobVM.Path 'DataDisks\SCM') -ItemType Directory -Force
+            $SSDPath = New-Item -Path (Join-Path $thisJobVM.Path 'DataDisks\SSD') -ItemType Directory -Force
+            $HDDPath = New-Item -Path (Join-Path $thisJobVM.Path 'DataDisks\HDD') -ItemType Directory -Force
 
             $thisJobLabConfig = $using:LabConfig
             $theseSCMDrives   = $thisJobLabConfig.VMs.Where{$thisJobVM.Name -like "*$($_.VMName)"}.SCMDrives
