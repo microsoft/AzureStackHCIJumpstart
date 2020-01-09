@@ -53,8 +53,21 @@ Describe 'Host Validation' -Tags Host {
             }
         }
 
-        It "${env:ComputerName} must have the specified ISO from LabConfig.ServerISOFolder" {
-            Test-Path $LabConfig.ServerISOFolder | Should be $true
+        If ($LabConfig.ContainsKey('ServerISO') -and $LabConfig.ContainsKey('BaseVHDX')) {
+            It "${env:ComputerName} LabConfig should not specify both BaseVHDX and ServerISO properties" { $true | Should be $false }
+        }
+        ElseIf ( (-not($LabConfig.ContainsKey('ServerISO'))) -and (-not($LabConfig.ContainsKey('BaseVHDX'))) ) {
+            It "${env:ComputerName} must specify either LabConfig.ServerISO or LabConfig.BaseVHDX" { $false | Should be $true }
+        }
+        ElseIf ($LabConfig.ServerISO) {
+            It "${env:ComputerName} the specified ISO from LabConfig.ServerISO must exist" {
+                Test-Path $LabConfig.ServerISO | Should be $true
+            }
+        }
+        ElseIf ($LabConfig.BaseVHDX) {
+            It "${env:ComputerName} the specified VHDX from LabConfig.BaseVHDX must exist" {
+                Test-Path $LabConfig.BaseVHDX | Should be $true
+            }
         }
     }
 }
