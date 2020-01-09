@@ -661,36 +661,6 @@ Function New-AzureStackHCIVMS2DDisks {
     }
 }
 
-Function Set-AzureStackHCIDiskMediaType {
-    #this isn't persisted so it needs to be run each time the system is rebooted.
-    # Create a schtask in the future
-    # Make sure to detec if the disk is actually local because once S2D is enabled, you'll see every disk from each node and rename improperly otherwise.
-
-    $AzureStackHCIVMs | ForEach-Object {
-        $thisVM = $_
-
-        #Note: Due to issue with Set-PhysicalDisk, mediatype/name is reset after a reboot; reset prior to creating cluster
-        $theseSCMDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SCMDrives.Size
-        $theseSSDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.SSDDrives.Size
-        $theseHDDDrivesSize = $LabConfig.VMs.Where{$thisVM.Name -like "*$($_.VMName)"}.HDDDrives.Size
-
-        Write-Host "Setting media type for the disks again."
-        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-            Get-PhysicalDisk | Where-Object Size -eq $using:theseSCMDrivesSize | Sort-Object Number | ForEach-Object {
-                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-PMEM$($_.DeviceID)" -MediaType SCM
-            }
-
-            Get-PhysicalDisk | Where-Object Size -eq $using:theseSSDDrivesSize | Sort-Object Number | ForEach-Object {
-                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-SSD$($_.DeviceID)" -MediaType SSD
-            }
-
-            Get-PhysicalDisk | Where-Object Size -eq $using:theseHDDDrivesSize | Sort-Object Number | ForEach-Object {
-                Set-PhysicalDisk -UniqueId $_.UniqueID -NewFriendlyName "$($env:ComputerName)-HDD$($_.DeviceID)" -MediaType HDD
-            }
-        }
-    }
-}
-
 Function New-AzureStackHCIVMAdapters {
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_

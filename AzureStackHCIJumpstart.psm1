@@ -302,6 +302,9 @@ Function New-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "$($thisVM.Name)-Stage 1 Checkpoints for HCI VMs" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
+                    Disable-VMIntegrationService -VMName $thisJobVMName -Name 'VSS'
+                    Enable-VMIntegrationService  -VMName $thisJobVMName -Name 'VSS'
+
                     [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisJobVM.Name)")
                     If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete' -ErrorAction SilentlyContinue)) {
                         [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
@@ -365,6 +368,9 @@ Function New-AzureStackHCIStageSnapshot {
                 $thisVM = $_
                 Start-RSJob -Name "$($thisVM.Name)-Stage 2 Checkpoints for HCI VMs" -ScriptBlock {
                     $thisJobVM = $using:thisVM
+
+                    Disable-VMIntegrationService -VMName $thisJobVMName -Name 'VSS'
+                    Enable-VMIntegrationService  -VMName $thisJobVMName -Name 'VSS'
 
                     [Console]::WriteLine("`t Verifying Stage 2 checkpoint exists for: $($thisJobVM.Name)")
                     If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 2 Complete' -ErrorAction SilentlyContinue)) {
@@ -432,6 +438,9 @@ Function New-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "Stage 3 Checkpoint for: $($thisVMName)" -ScriptBlock {
                     $thisJobVMName = $using:thisVMName
 
+                    Disable-VMIntegrationService -VMName $thisJobVMName -Name 'VSS'
+                    Enable-VMIntegrationService  -VMName $thisJobVMName -Name 'VSS'
+
                     If (-not (Get-VMSnapshot -VMName $thisJobVMName -Name 'Stage 3 Complete' -ErrorAction SilentlyContinue)) {
                         [Console]::WriteLine("`t `tCreating Stage 3 checkpoint for: $($thisJobVMName)")
                         Checkpoint-VM -Name $thisJobVMName -SnapshotName 'Stage 3 Complete'
@@ -477,6 +486,9 @@ Function New-AzureStackHCIStageSnapshot {
                 [Console]::WriteLine("`t Creating Stage 4 checkpoint for: $thisVMName")
                 Start-RSJob -Name "Stage 4 Checkpoint for: $($thisVMName)" -ScriptBlock {
                     $thisJobVMName = $using:thisVMName
+
+                    Disable-VMIntegrationService -VMName $thisJobVMName -Name 'VSS'
+                    Enable-VMIntegrationService  -VMName $thisJobVMName -Name 'VSS'
 
                     If (-not (Get-VMSnapshot -VMName $thisJobVMName -Name 'Stage 4 Complete' -ErrorAction SilentlyContinue)) {
                         [Console]::WriteLine("`t `tCreating Stage 4 checkpoint for: $($thisJobVMName)")

@@ -1,8 +1,8 @@
 # Jumpstart your Azure Stack HCI Lab
 
-This module is intended to deploy a ****lab environment*** for testing Azure Stack HCI - specifically using the deployment UI in Windows Admin Center. With this module, you can test your Azure Stack HCI deployment in VMs, on a single host, in various configurations including various:
+This module is intended to deploy a **lab environment** for testing Azure Stack HCI - specifically using the deployment UI in Windows Admin Center. With this module, you can test your Azure Stack HCI deployment in VMs, on a single host, and **emulate** various configurations including:
 
-- NIC configurations
+- NIC configurations (emulate Intel, Marvel, Mellanox, Chelsio, Broadcom, etc.)
 - Disk types (SCM, SSD, HDD)
 
 For more details on what this does, please see [What it does in a little more depth](#What-it-does-in-a-little-more-depth)
@@ -11,25 +11,21 @@ For more details on what this does, please see [What it does in a little more de
 
 The latest version added:
 
-- You can now provide a VHDX or an ISO to base VMs off of. VHDX greatly speeds up the lab deployment time as hyrdration from an ISO is one of the longest tasks.
+- You can now rerun the `Initialize-AzureStackHCILabOrchestration` repeatedly on the nodes. This is useful if one or more of the VMs are messed up, disks, or NICs, Active Directory, etc., are messed up
 
-- Parallelization for several tasks that applied to all VMs or the Azure Stack HCI VMs
+- You can now provide a VHDX or an ISO to create VMs. VHDX greatly speeds up the lab deployment time as hyrdration from an ISO is one of the longest tasks.
 
-- Checkpoints that let you accelerate the deployment phases *(Currently stage 0 and 1 only)
+- Parallelization for several tasks that apply to all VMs or the Azure Stack HCI VMs
+
+- Checkpoints that let you accelerate and revert the deployment phases for quick practice *(Stages 0 (start) - 4 (S2D))*
 
 - Internet access from the VMs
-
-- Resolved issues where the disk media types were reset following a reboot
-
-- Moved functions that can be called by the user to the main module `\AzureStackHCIJumpstart.psm1`
-
-- Moved functions used by the module (not directly by the user) to the helpers module.
 
 # Getting Started
 
 By default, you must provide a ISO or a VHDX which will be used to install VMs. You need to provide only one these and update that **one** value to create the lab.
 
-1. Open ****.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1****
+1. Open **.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1**
 
 2. In the `Get-AzureStackHCILabConfig` function, edit either the `ServerISO` or the `BaseVHDX` property.
 
@@ -39,13 +35,13 @@ By default, you must provide a ISO or a VHDX which will be used to install VMs. 
 
         2. `BaseVHDX` This is a VHDX with a Windows OS image installed
 
-    b. You can use existing VMs rather than create your own however you still need to provide either the `ServerISO` or the `BaseVHDX` file path. Instructions for using your own VMs are out of scope.
+    b. You can experiment using existing VMs rather than having the lab create them however you still need to provide either the `ServerISO` or the `BaseVHDX` file path. Instructions for using your own VMs are out of scope.
 
 3. Run `Initialize-AzureStackHCILabOrchestration`
 
 ## Additional (but not required) configuration
 
-1. Open ****.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1****
+1. Open **.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1**
 
 2. In the `Get-AzureStackHCILabConfig` function, edit the desired properties
 
@@ -135,7 +131,7 @@ While you can restore the snapshots manually, this ensures that all machines are
 
 ## Troubleshooting
 
-****After the lab orchestration command completes, I see a red-error "Credential Invalid"***
+**After the lab orchestration command completes, I see a red-error "Credential Invalid"**
 
 This indicates we were unable to log into one of the VMs and perform some work. To resolve this, try running the ```Initialize-AzureStackHCILabOrchestration``` again.
 
