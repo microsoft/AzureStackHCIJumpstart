@@ -540,7 +540,7 @@ Function Restore-AzureStackHCIStageSnapshot {
 
         1 {
             #TODO: Where -ne to domain controller
-            $AzureStackHCIVMs | ForEach-Object {
+            $AllVMs | ForEach-Object {
                 $thisVM = $_
                 Start-RSJob -Name "$($thisVM.Name)-Restoring starting checkpoint" -ScriptBlock {
                     $thisJobVM = $using:thisVM
