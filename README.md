@@ -22,6 +22,7 @@ The latest version added:
 - Internet access from the VMs
 
 # Getting Started
+=======
 
 By default, you must provide a ISO or a VHDX which will be used to install VMs. You need to provide only one these and update that **one** value to create the lab.
 
@@ -39,7 +40,7 @@ By default, you must provide a ISO or a VHDX which will be used to install VMs. 
 
 3. Run `Initialize-AzureStackHCILabOrchestration`
 
-## Additional (but not required) configuration
+## Additional (but not required) configuration (e.g. you don't have to do this)
 
 1. Open **.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1**
 
@@ -116,8 +117,16 @@ While you can restore the snapshots manually, this ensures that all machines are
 ```
 
 ## Remove the lab
+=======
+Note: The long-term goal is that these two commands can all be run independently but additional testing is needed. If you find an issue, file a bug and just keep running the lab orchestration command
 
-**Removes all HCI VMs (Hyper-V Hosts and WAC VM)**
+```New-AzureStackHCILabEnvironment```
+
+```Invoke-AzureStackHCILabVMCustomization```
+
+## Destruction
+
+**Removes all HCI VMs (Hyper-V Hosts)**
 
 ```PowerShell
     Remove-AzureStackHCILabEnvironment
@@ -150,14 +159,16 @@ It's doing a lot and there are some long-running tasks (measured in minutes rath
 
 - Run prerequisite checks on the host
 
-- {long} Create a new base disk. This is the parent disk initially used by the VMs and uses a basic unattend file.
+- {long} Create a new base disk. This is the parent disk initially used by the VMs and uses a basic unattend file. This is only necessary if you specify the ```ServerISO``` property
 
 - Creates an internal virtual switch and a NAT network for the VMs to attach to
 
 - Create any missing VMs
 
     - Rename VMs guest OS to match the name in Hyper-V and (once domain is created) join the VMs to the domain
+    
     - Removes old VMHardware (NICs and Disks) then recreates them. Ensures everything is clean and predictable/identical inside the VMs.
+    
     - Enables inbound SMB and ICMP firewall rules.
 
 - {long} Make copies of the base disk for each VM. Once copies are complete, reparent the VHDX to the copy. This serves two purposes:
@@ -166,14 +177,6 @@ It's doing a lot and there are some long-running tasks (measured in minutes rath
     - Improves VM performance once reparented
 
 - {long} Create the AD Domain; configures DHCP used to program the rest of the VMs; configures DNS to resolve internet-based resources.
-
-- {long} Creates VM Snapshots to allow you to test different stages more easily
-    - Stage 0 (Base) - Includes anything needed before the deployment UI can start
-    - Stage 1 (Feat) - Windows features are installed on Azure Stack HCI VMs
-    - Stage 2 (Net)  - No snapshot currently taken
-    - Stage 3        - #TODO: Update this section
-    - Stage 4 (S2D)  - No snapshot currently taken
-    - Stage 5 (SDN)  - No snapshot currently taken
 
 # Community or external modules used
 

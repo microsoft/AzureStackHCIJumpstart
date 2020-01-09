@@ -337,6 +337,7 @@ Function New-AzureStackHCIStageSnapshot {
                 Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
+
                     Remove-VMSwitch -Name * -Force -ErrorAction SilentlyContinue
                     $DataAdapters = Get-NetAdapter | Where-Object Name -like "Ethernet*" | Sort-Object Name
 
@@ -532,6 +533,7 @@ Function Restore-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "$($thisVM.Name)-Restoring starting checkpoint" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
+
                     [Console]::WriteLine("Restoring starting checkpoint for: $($thisJobVM.Name)")
                     Restore-VMSnapshot -Name Start -VMName $thisJobVM.Name -Confirm:$false
                 } -OutVariable +RSJob | Out-Null
@@ -698,6 +700,18 @@ Function Remove-AzureStackHCIStageSnapshot {
                 } -OutVariable +RSJob | Out-Null
             }
         }
+
+        Write-Host "Enabling SMB-in and Echo-in firewall rules"
+        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
+            Get-NetFirewallRule -DisplayName "*File and Printer Sharing (Echo Request*In)" | Enable-NetFirewallRule
+            Get-NetFirewallRule -DisplayName "File and Printer Sharing (SMB-In)" | Enable-NetFirewallRule
+        }
+    }
+
+    if ($ranOOB) {
+        $EndTime = Get-Date
+        "Start Time: $StartTime"
+        "End Time: $EndTime"
     }
 
     Wait-RSJob   $RSJob | Out-Null
