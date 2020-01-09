@@ -389,7 +389,7 @@ Function Initialize-BaseDisk {
                 DependsOn = "[xDhcpServerOption]MgmtScopeRouterOption"
             }
 
-            $localDNSServers = (Get-NetIPConfiguration | Where-Object IPv4DefaultGateway -ne $Null | Select -First 1).DNSServer.ServerAddresses
+            $localDNSServers = (Get-NetIPConfiguration | Where-Object IPv4DefaultGateway -ne $Null | Select-Object -First 1).DNSServer.ServerAddresses
 
             xDnsServerForwarder "forwarder_" {
                 IsSingleInstance = 'Yes'
@@ -845,7 +845,11 @@ Function Register-AzureStackHCIStartupTasks {
             bcdedit /set recoveryenabled no
             bcdedit /timeout 1
 
-            #Stop Server Manager from opening
+            # Prevent dirty shutdown notification
+            Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Reliability" -Name "DirtyShutdown"
+            Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Reliability" -Name "DirtyShutdownTime"
+
+            # Stop Server Manager from opening
             New-ItemProperty -Path HKLM:\Software\Microsoft\ServerManager -Name DoNotOpenServerManagerAtLogon -PropertyType DWORD -Value '0x1' -Force | Out-Null
 "@
 

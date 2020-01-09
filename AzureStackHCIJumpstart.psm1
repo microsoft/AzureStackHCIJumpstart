@@ -58,6 +58,7 @@ Function Get-AzureStackHCILabConfig {
         VMName = 'WAC01'
         MemoryStartupBytes = 4GB
 
+        # Accept folders of MSI's or a specific MSI
         MSIInstaller = @(
             @{ Path = 'c:\datastore\folderA' } ,
             @{ Path = 'c:\datastore\MSIFile1.msi' }
@@ -229,11 +230,11 @@ Function New-AzureStackHCIStageSnapshot {
                     $thisJobVM = $using:thisVM
 
                     [Console]::WriteLine("Verifying Starting checkpoint exists for: $($thisJobVM.Name)")
-                    If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start)) {
+                    If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name Start -ErrorAction SilentlyContinue)) {
                         [Console]::WriteLine("`tCreating starting checkpoint for: $($thisJobVM.Name)")
                         Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Start'
                     }
-                    Else { [Console]::WriteLine('Stage 0 (Start) Snapshot already exists for: $($thisJobVM.Name)') }
+                    Else { [Console]::WriteLine("Stage 0 (Start) Snapshot already exists for: $($thisJobVM.Name)") }
                 } -OutVariable +RSJob | Out-Null
             }
 
@@ -246,11 +247,11 @@ Function New-AzureStackHCIStageSnapshot {
 
         1 {
             #TODO: Don't allow stage 1 without taking stage 0
-            [Console]::WriteLine('Applying Start Checkpoint prior to beginning Stage 1')
-            Restore-AzureStackHCIStageSnapshot -Stage 0
+            #[Console]::WriteLine('Applying Start Checkpoint prior to beginning Stage 1')
+            #Restore-AzureStackHCIStageSnapshot -Stage 0
 
             [Console]::WriteLine('Ensuring machines are on')
-            Reset-AzStackVMs -Start -Wait -VMs $AzureStackHCIVMs
+            Reset-AzStackVMs -Start -Wait -VMs $AllVMs
 
             $AzureStackHCIVMs | ForEach-Object {
                 $thisVM = $_
@@ -280,10 +281,10 @@ Function New-AzureStackHCIStageSnapshot {
                     [Console]::WriteLine("Checking Stage 1 pending features for: $($thisJobVM.Name)")
                     Invoke-Command -VMName $thisJobVM.Name -Credential $using:VMCred -ScriptBlock {
                         #Note: Check for install pending the first time, then loop till its null
-                        $InstallPending = Get-WindowsFeature | Where Installstate -eq 'InstallPending'
+                        $InstallPending = Get-WindowsFeature | Where-Object Installstate -eq 'InstallPending'
 
                         While ($InstallPending -ne $Null) {
-                            $InstallPending = Get-WindowsFeature | Where Installstate -eq 'InstallPending'
+                            $InstallPending = Get-WindowsFeature | Where-Object Installstate -eq 'InstallPending'
                             Start-Sleep -Seconds 5
                         }
                     }
@@ -302,7 +303,7 @@ Function New-AzureStackHCIStageSnapshot {
                     $thisJobVM = $using:thisVM
 
                     [Console]::WriteLine("`t Verifying Stage 1 checkpoint exists for: $($thisJobVM.Name)")
-                    If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete')) {
+                    If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 1 Complete' -ErrorAction SilentlyContinue)) {
                         [Console]::WriteLine("`t `tCreating Stage 1 checkpoint for: $($thisJobVM.Name)")
                         Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 1 Complete'
                     }
@@ -342,7 +343,7 @@ Function New-AzureStackHCIStageSnapshot {
                     }
 
                     Remove-Variable lastOctet, subnet -ErrorAction SilentlyContinue
-                    New-VMSwitch -Name 'ComputeSwitch' -AllowManagementOS $false -NetAdapterName ($DataAdapters.Name | Select-Object -First 2)
+                    New-VMSwitch -Name 'ComputeSwitch' -AllowManagementOS $false -NetAdapterName ($DataAdapters.Name | Select-Object -First 2) | Out-Null
 
                     $subnet = 0
                     $lastOctet = $using:HostNum + 1
@@ -366,7 +367,7 @@ Function New-AzureStackHCIStageSnapshot {
                     $thisJobVM = $using:thisVM
 
                     [Console]::WriteLine("`t Verifying Stage 2 checkpoint exists for: $($thisJobVM.Name)")
-                    If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 2 Complete')) {
+                    If (-not (Get-VMSnapshot -VMName $thisJobVM.Name -Name 'Stage 2 Complete' -ErrorAction SilentlyContinue)) {
                         [Console]::WriteLine("`t `tCreating Stage 2 checkpoint for: $($thisJobVM.Name)")
                         Checkpoint-VM -Name $thisJobVM.Name -SnapshotName 'Stage 2 Complete'
                     }
@@ -431,7 +432,7 @@ Function New-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "Stage 3 Checkpoint for: $($thisVMName)" -ScriptBlock {
                     $thisJobVMName = $using:thisVMName
 
-                    If (-not (Get-VMSnapshot -VMName $thisJobVMName -Name 'Stage 3 Complete')) {
+                    If (-not (Get-VMSnapshot -VMName $thisJobVMName -Name 'Stage 3 Complete' -ErrorAction SilentlyContinue)) {
                         [Console]::WriteLine("`t `tCreating Stage 3 checkpoint for: $($thisJobVMName)")
                         Checkpoint-VM -Name $thisJobVMName -SnapshotName 'Stage 3 Complete'
                         Start-Sleep -Seconds 5
@@ -449,7 +450,7 @@ Function New-AzureStackHCIStageSnapshot {
             Reset-AzStackVMs -Start -Wait -VMs $AllVMs
 
             [Console]::WriteLine("`t Prepping Stage 4 - S2D")
-            $AzureStackHCIVMs | Select -First 1 | ForEach-Object {
+            $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
                 $thisVM = $_
 
                 [Console]::WriteLine("`t `t Cleaning disks and enabling S2D")
@@ -477,7 +478,7 @@ Function New-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "Stage 4 Checkpoint for: $($thisVMName)" -ScriptBlock {
                     $thisJobVMName = $using:thisVMName
 
-                    If (-not (Get-VMSnapshot -VMName $thisJobVMName -Name 'Stage 4 Complete')) {
+                    If (-not (Get-VMSnapshot -VMName $thisJobVMName -Name 'Stage 4 Complete' -ErrorAction SilentlyContinue)) {
                         [Console]::WriteLine("`t `tCreating Stage 4 checkpoint for: $($thisJobVMName)")
                         Checkpoint-VM -Name $thisJobVMName -SnapshotName 'Stage 4 Complete'
                         Start-Sleep -Seconds 5
@@ -495,7 +496,7 @@ Function New-AzureStackHCIStageSnapshot {
 Function Restore-AzureStackHCIStageSnapshot {
     param (
         [Parameter(Mandatory=$true)]
-        [ValidateSet('0', '1', '3')]
+        [ValidateSet('0', '1', '2', '3')]
         [Int32] $Stage
     )
 
@@ -551,6 +552,20 @@ Function Restore-AzureStackHCIStageSnapshot {
             }
         }
 
+        2 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Restoring Stage 2" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Restore-VMSnapshot -Name 'Stage 2 Complete' -VMName $thisJobVM.Name -Confirm:$false
+                } -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
+        }
+
         3 {
             #TODO: Where not WAC
             $AllVMs | ForEach-Object {
@@ -567,7 +582,7 @@ Function Restore-AzureStackHCIStageSnapshot {
             Write-Host "Starting "
             Reset-AzStackVMs -Start -Wait -VMs $AllVMs
 
-            $AzureStackHCIVMs | Select -First 1 | ForEach-Object {
+            $AzureStackHCIVMs | Select-Object -First 1 | ForEach-Object {
                 $thisVM = $_
 
                 Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
@@ -581,7 +596,7 @@ Function Restore-AzureStackHCIStageSnapshot {
 Function Remove-AzureStackHCIStageSnapshot {
     param (
         [Parameter(Mandatory=$false)]
-        [ValidateSet('0', '1', '3', '4')]
+        [ValidateSet('0', '1', '2', '3', '4')]
         [Int32] $Stage
     )
 
@@ -604,7 +619,7 @@ Function Remove-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "$($thisVM.Name)-RemoveStage1Snapshots" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
-                    Get-VMSnapshot -VMName $thisJobVM.Name | Where Name -eq 'Start' | Remove-VMSnapshot -IncludeAllChildSnapshots
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where-Object Name -eq 'Start' | Remove-VMSnapshot -IncludeAllChildSnapshots
                 } -OutVariable +RSJob | Out-Null
             }
         }
@@ -617,6 +632,18 @@ Function Remove-AzureStackHCIStageSnapshot {
                     $thisJobVM = $using:thisVM
 
                     Get-VMSnapshot -VMName $thisJobVM.Name | Where-Object Name -like 'Stage 1*' | Remove-VMSnapshot -IncludeAllChildSnapshots
+                } -OutVariable +RSJob | Out-Null
+            }
+        }
+
+        2 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+
+                Start-RSJob -Name "$($thisVM.Name)-RemoveStage3Snapshots" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where-Object Name -like 'Stage 2*' | Remove-VMSnapshot -IncludeAllChildSnapshots
                 } -OutVariable +RSJob | Out-Null
             }
         }
@@ -655,7 +682,7 @@ Function Remove-AzureStackHCIStageSnapshot {
                 Start-RSJob -Name "$($thisVM.Name)-RemoveAllSnapshots" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
-                    Get-VMSnapshot -VMName $thisJobVM.Name | Where ParentSnapshotName -eq $null | Remove-VMSnapshot -IncludeAllChildSnapshots
+                    Get-VMSnapshot -VMName $thisJobVM.Name | Where-Object ParentSnapshotName -eq $null | Remove-VMSnapshot -IncludeAllChildSnapshots
                 } -OutVariable +RSJob | Out-Null
             }
         }
