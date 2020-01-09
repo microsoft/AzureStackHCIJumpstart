@@ -17,7 +17,7 @@ Function Get-AzureStackHCILabConfig {
         # This is the filepath to the ISO that will be used to deploy the lab VMs
         #ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
-        BaseVHDX    = 'C:\datastore\CustomVHD\19540.1000.amd64fre.rs_prerelease.191218-1507_server_serverdatacenter_en-us_vl.vhdx'
+        BaseVHDX    = 'C:\datastore\CustomVHD\BaseDisk_19540_server_serverdatacenter_en-us_vl'
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
@@ -699,12 +699,6 @@ Function Remove-AzureStackHCIStageSnapshot {
                     Get-VMSnapshot -VMName $thisJobVM.Name | Where-Object ParentSnapshotName -eq $null | Remove-VMSnapshot -IncludeAllChildSnapshots
                 } -OutVariable +RSJob | Out-Null
             }
-        }
-
-        Write-Host "Enabling SMB-in and Echo-in firewall rules"
-        Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-            Get-NetFirewallRule -DisplayName "*File and Printer Sharing (Echo Request*In)" | Enable-NetFirewallRule
-            Get-NetFirewallRule -DisplayName "File and Printer Sharing (SMB-In)" | Enable-NetFirewallRule
         }
     }
 
