@@ -509,7 +509,7 @@ Function New-AzureStackHCIStageSnapshot {
 Function Restore-AzureStackHCIStageSnapshot {
     param (
         [Parameter(Mandatory=$true)]
-        [ValidateSet('0', '1', '2', '3')]
+        [ValidateSet('0', '1', '2', '3', '4')]
         [Int32] $Stage
     )
 
@@ -603,6 +603,20 @@ Function Restore-AzureStackHCIStageSnapshot {
                     Start-ClusterResource -Name 'Cluster Name' | Out-Null
                 }
             }
+        }
+
+        4 {
+            $AllVMs | ForEach-Object {
+                $thisVM = $_
+                Start-RSJob -Name "$($thisVM.Name)-Restoring Stage 2" -ScriptBlock {
+                    $thisJobVM = $using:thisVM
+
+                    Restore-VMSnapshot -Name 'Stage 2 Complete' -VMName $thisJobVM.Name -Confirm:$false
+                } -OutVariable +RSJob | Out-Null
+            }
+
+            Wait-RSJob   $RSJob | Out-Null
+            Remove-RSJob $RSJob | Out-Null
         }
     }
 }
