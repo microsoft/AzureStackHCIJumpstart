@@ -22,7 +22,6 @@ The latest version added:
 - Internet access from the VMs
 
 # Getting Started
-=======
 
 By default, you must provide a ISO or a VHDX which will be used to install VMs. You need to provide only one these and update that **one** value to create the lab.
 
@@ -166,9 +165,9 @@ It's doing a lot and there are some long-running tasks (measured in minutes rath
 - Create any missing VMs
 
     - Rename VMs guest OS to match the name in Hyper-V and (once domain is created) join the VMs to the domain
-    
+
     - Removes old VMHardware (NICs and Disks) then recreates them. Ensures everything is clean and predictable/identical inside the VMs.
-    
+
     - Enables inbound SMB and ICMP firewall rules.
 
 - {long} Make copies of the base disk for each VM. Once copies are complete, reparent the VHDX to the copy. This serves two purposes:
