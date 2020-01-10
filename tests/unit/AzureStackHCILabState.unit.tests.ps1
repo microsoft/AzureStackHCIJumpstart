@@ -84,5 +84,4 @@ Describe 'Lab Validation' -Tags Lab {
     }
 }
 
-
 #TODO: if BaseVHDX specified, test that you have rights to open the file
