@@ -234,6 +234,13 @@ Function Initialize-BaseDisk {
             $DriveLetter = $(Get-DiskImage -ImagePath $VHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
             $MountPath = "$($DriveLetter):" -replace ' '
 
+            #TODO: Make sure not the same size as the drives included in LabConfig
+            Switch ($MountedDisk.Size) {
+                {$_ -le 100GB} {
+                    Resize-Partition -DriveLetter $MountPath -Size (100GB)
+                }
+            }
+
             If ( Test-Path "$MountPath\Windows\Panther\unattend.xml" ) {
                 Write-Host "`t Unattend file exists..."
             }
@@ -473,7 +480,7 @@ Function Add-LabVirtualMachines {
         else {
             Write-Host "`t Creating VM: $($LabConfig.Prefix)$($_.VMName)"
             $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes $_.MemoryStartupBytes -Path $vmpath -SwitchName "$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -Generation 2
-            New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -SizeBytes 127GB -ParentPath $VHDPath -Differencing -ErrorAction SilentlyContinue | Out-Null
+            New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -Differencing | Out-Null
             $BootDevice = Add-VMHardDiskDrive -VMName "$($LabConfig.Prefix)$($_.VMName)" -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Passthru -ErrorAction SilentlyContinue
             Set-VMFirmware -VMName "$($LabConfig.Prefix)$($_.VMName)" -BootOrder $BootDevice
             Set-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -IgnoreIdMismatch -ErrorAction SilentlyContinue
@@ -520,6 +527,7 @@ Function Wait-ForAzureStackHCIDomain {
         $DCName = "$($LabConfig.Prefix)$($_.VMName)"
     }
 
+    $RebootCounter = 0
     do {
         # Use local cred until domain is created
         $DscConfigurationStatus = Invoke-Command -VMName $DCName -ScriptBlock {
@@ -530,7 +538,8 @@ Function Wait-ForAzureStackHCIDomain {
             Get-DSCLocalConfigurationManager -ErrorAction SilentlyContinue
         } -Credential $localCred -ErrorAction SilentlyContinue
 
-# This should be status -ne Success
+# LCM State: PendingConfiguration
+# LCM Detail Blank
         if ($DscConfigurationStatus.Status -ne 'Success') {
             Write-Host "`t Domain Controller Configuration in Progress. Sleeping for 20 seconds."
 
@@ -538,6 +547,17 @@ Function Wait-ForAzureStackHCIDomain {
             Else {
                 Write-Host "`t `t LCM State : $($DSCLocalConfigurationManager.LCMState)"
                 Write-Host "`t `t LCM Detail: $($DSCLocalConfigurationManager.LCMStateDetail) `n"
+
+                If ($($DSCLocalConfigurationManager.LCMState) -eq 'PendingConfiguration' -and $($DSCLocalConfigurationManager.LCMStateDetail) -eq $null) {
+                    $RebootCounter ++
+                }
+
+                If ($RebootCounter -eq 10) {
+                    Stop-VM  -VMName $DCName -Force
+                    Start-VM -VMName $DCName -Force
+
+                    $RebootCounter = 0
+                }
             }
 
             Start-Sleep 20
@@ -545,6 +565,8 @@ Function Wait-ForAzureStackHCIDomain {
             Write-Host "`t Current Domain state: $($DscConfigurationStatus.status), ResourcesNotInDesiredState: $($DscConfigurationStatus.resourcesNotInDesiredState.count), ResourcesInDesiredState: $($DscConfigurationStatus.resourcesInDesiredState.count)"
         }
     } until ($DscConfigurationStatus.Status -eq 'Success' -and $DscConfigurationStatus.rebootrequested -eq $false)
+
+    Remove-Variable RebootCounter -ErrorAction SilentlyContinue
 
     Write-Host "`t `t Domain $($LabConfig.DomainName) configured successfully `n"
 

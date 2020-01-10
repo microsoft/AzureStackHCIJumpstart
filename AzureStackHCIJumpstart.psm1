@@ -335,8 +335,6 @@ Function New-AzureStackHCIStageSnapshot {
                 $thisVM = $_
 
                 Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
-                    $thisJobVM = $using:thisVM
-
 
                     Remove-VMSwitch -Name * -Force -ErrorAction SilentlyContinue
                     $DataAdapters = Get-NetAdapter | Where-Object Name -like "Ethernet*" | Sort-Object Name
@@ -1086,13 +1084,13 @@ Function Initialize-AzureStackHCILabOrchestration {
         $thisVM = $_
         $BaseDiskACL = Get-ACL $VHDPath
 
+        #TODO: There's an issue (appears to be strangely happening on node 2) that stops the OSD from being added
         Start-RSJob -Name "$($thisVM.Name)-MergeAndACL" -ScriptBlock {
             $thisJobVM = $using:thisVM
 
             $VHDXToConvert = $thisJobVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
             $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
 
-            # Note: Get-VHD ParentPath always reports with 1 character if it's actually Null which is why we're doing this next monstrosity to figure out if it actually has a base disk or not
             if ($BaseDiskPath.Length -gt 0) {
                 [Console]::WriteLine("`t Beginning VHDX Merge for $($thisJobVM.Name)")
 
@@ -1101,8 +1099,6 @@ Function Initialize-AzureStackHCILabOrchestration {
                 Remove-VMHardDiskDrive -VMName $thisJobVM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI
 
                 Merge-VHD -Path $VHDXToConvert.Path -DestinationPath $BaseDiskPath
-                Start-Sleep -Seconds 3
-                Add-VMHardDiskDrive -VM $thisJobVM -Path $BaseDiskPath -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
             }
             Else { [Console]::WriteLine("`t $($thisJobVM.Name) VHDX has already been merged - backslash Ignore") }
         } -OutVariable +RSJob | Out-Null
@@ -1113,6 +1109,12 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     $AllVMs | ForEach-Object {
         $thisVM = $_
+
+        $MergedBaseDisk = "$($thisVM.Path)\Virtual Hard Disks\$($VHDPath.Split('\') | Select -Last 1)"
+
+        If (-not($OSDDisk)) {
+            Add-VMHardDiskDrive -VM $thisVM -Path $MergedBaseDisk -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
+        }
 
         # Now that the S2D Disks and NICs have been re-added make sure to change the boot order again.
         $OSD = Get-VMHardDiskDrive -VMName $thisVM.Name -ControllerNumber 0 -ControllerLocation 0
