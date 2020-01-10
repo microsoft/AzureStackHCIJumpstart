@@ -608,10 +608,10 @@ Function Restore-AzureStackHCIStageSnapshot {
         4 {
             $AllVMs | ForEach-Object {
                 $thisVM = $_
-                Start-RSJob -Name "$($thisVM.Name)-Restoring Stage 2" -ScriptBlock {
+                Start-RSJob -Name "$($thisVM.Name)-Restoring Stage 4" -ScriptBlock {
                     $thisJobVM = $using:thisVM
 
-                    Restore-VMSnapshot -Name 'Stage 2 Complete' -VMName $thisJobVM.Name -Confirm:$false
+                    Restore-VMSnapshot -Name 'Stage 4 Complete' -VMName $thisJobVM.Name -Confirm:$false
                 } -OutVariable +RSJob | Out-Null
             }
 
@@ -1110,6 +1110,14 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     Wait-RSJob   $RSJob | Out-Null
     Remove-RSJob $RSJob | Out-Null
+
+    $AllVMs | ForEach-Object {
+        $thisVM = $_
+
+        # Now that the S2D Disks and NICs have been re-added make sure to change the boot order again.
+        $OSD = Get-VMHardDiskDrive -VMName $thisVM.Name -ControllerNumber 0 -ControllerLocation 0
+        Set-VMFirmware  -VMName $thisVM.Name -BootOrder $OSD
+    }
 #endregion
 
 #region In-guest customization
@@ -1138,4 +1146,7 @@ Function Initialize-AzureStackHCILabOrchestration {
 
 - If AD Accounts already exist, the rename doesn't work...
 - Once Complete, test that VMs have correct names
+
+- Enable MAC Spoofing on the HV Ethernet vmNICs
+- Enable enhanced session mode on HV VMhosts
 #>

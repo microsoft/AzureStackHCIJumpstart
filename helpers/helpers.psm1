@@ -473,7 +473,7 @@ Function Add-LabVirtualMachines {
         else {
             Write-Host "`t Creating VM: $($LabConfig.Prefix)$($_.VMName)"
             $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes $_.MemoryStartupBytes -Path $vmpath -SwitchName "$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -Generation 2
-            New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -Differencing -ErrorAction SilentlyContinue | Out-Null
+            New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -SizeBytes 127GB -ParentPath $VHDPath -Differencing -ErrorAction SilentlyContinue | Out-Null
             $BootDevice = Add-VMHardDiskDrive -VMName "$($LabConfig.Prefix)$($_.VMName)" -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Passthru -ErrorAction SilentlyContinue
             Set-VMFirmware -VMName "$($LabConfig.Prefix)$($_.VMName)" -BootOrder $BootDevice
             Set-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -IgnoreIdMismatch -ErrorAction SilentlyContinue
