@@ -17,7 +17,7 @@ Function Get-AzureStackHCILabConfig {
         # This is the filepath to the ISO that will be used to deploy the lab VMs
         #ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
-        BaseVHDX    = 'C:\datastore\CustomVHD\BaseDisk_19540_server_serverdatacenter_en-us_vl'
+        BaseVHDX    = 'C:\DataStore\CustomVHD\RS_PRERELEASE_19531.1000.191204-1324_server_en-us_vl_Full.vhdx'
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
@@ -1020,6 +1020,12 @@ Function Initialize-AzureStackHCILabOrchestration {
             $thisLabConfig = $using:LabConfig
 
             Set-DnsServerPrimaryZone -Name "$($LabConfig.DomainName)" -DynamicUpdate "NonsecureAndSecure"
+
+            #Note: Using the $using:VMCred does not work here. Need to create the credential on the remote machine.
+            $pass   = ConvertTo-SecureString $($thisLabConfig.AdminPassword) -AsPlainText -Force
+            $VMCred = New-Object System.Management.Automation.PSCredential ("$($thisLabConfig.DomainNetbiosName)\$($thisLabConfig.DomainAdminName)", $pass)
+
+            Set-DhcpServerDnsCredential -ComputerName AzStackHCIDC01 -Credential $VMCred
 
             $thisLabConfig.VMs.Where{ $_.Role -ne 'Domain Controller'} | ForEach-Object {
                 $thisVM = "$($thisLabConfig.Prefix)$($_.VMName)"
