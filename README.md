@@ -5,6 +5,8 @@ This module is intended to deploy a **lab environment** for testing Azure Stack 
 - NIC configurations (emulate Intel, Marvel, Mellanox, Chelsio, Broadcom, etc.)
 - Disk types (SCM, SSD, HDD)
 
+There are several unique configurations that makes testing the deployment UI in VMs challenging. This module simplifies (requires only one input) these challenges as it was purpose-built.
+
 For more details on what this does, please see [What it does in a little more depth](#What-it-does-in-a-little-more-depth)
 
 ## What's New - Version 2020.1.1.2
@@ -15,13 +17,21 @@ The latest version added:
 
 - You can now provide a VHDX or an ISO to create VMs. VHDX greatly speeds up the lab deployment time as hyrdration from an ISO is one of the longest tasks.
 
-- Parallelization for several tasks that apply to all VMs or the Azure Stack HCI VMs
+- Parallelized several tasks that apply to all VMs or the Azure Stack HCI VMs
 
-- Checkpoints that let you accelerate and revert the deployment phases for quick practice *(Stages 0 (start) - 4 (S2D))*
+- Checkpoints that let you accelerate and revert the deployment phases for quick practice *(Stages 0 (start) - 4 (S2D))*. To use the snapshots use ```New-AzureStackHCIStageSnapshot``` or ```Restore-AzureStackHCIStageSnapshot``` or ```Remove-AzureStackHCIStageSnapshot``` (Syntax is shown below).
 
 - Internet access from the VMs
 
 # Getting Started
+
+## Getting this module to your system
+
+Until published on the PowerShell gallery, use ```git clone``` to clone the repo to a local folder. If not cloned to an auto-searched PowerShell location, run ```Import-Module <Path to AzureStackHCIJumpstart.psd1> -Force```
+
+Once this module is in the PowerShell gallery, use ```Install-Module AzureStackHCIJumpstart``` or for air-gapped systems [Save-Module](https://docs.microsoft.com/en-us/powershell/module/powershellget/save-module). If using ```Save-Module``` you'll need to specify a folder to save the module and all dependencies, then move the module to the disconnected system. Make sure to place the module in one of the auto-searched folders, e.g. ```C:\Program Files\WindowsPowerShell\Modules\...```
+
+## Required Configuration
 
 By default, you must provide a ISO or a VHDX which will be used to install VMs. You need to provide only one these and update that **one** value to create the lab.
 

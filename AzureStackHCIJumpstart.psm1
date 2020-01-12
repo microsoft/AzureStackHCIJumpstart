@@ -996,20 +996,21 @@ Function Initialize-AzureStackHCILabOrchestration {
     Wait-RSJob   $RSJob | Out-Null
     Remove-RSJob $RSJob | Out-Null
 
-    # Rename host requires reboot
-    $AllVMs.Where{$_.Role -ne 'Domain Controller'} | Foreach-Object {
-        $thisVM = $_
-        $RebootIsNeeded = Invoke-Command -VMName $thisVM.Name -Credential $localCred -ScriptBlock {
-            if ($env:COMPUTERNAME -ne $using:thisVM.Name) {
-                Rename-Computer -NewName $($using:thisVM.Name) -Force -WarningAction SilentlyContinue
+    # DC has already been renamed
+    $LabConfig.VMs.Where{ $_.Role -ne 'Domain Controller' } | Foreach-Object {
+        $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
+
+        $RebootIsNeeded = Invoke-Command -VMName $thisSystem -Credential $localCred -ScriptBlock {
+            if ($env:COMPUTERNAME -ne $using:thisSystem) {
+                Rename-Computer -NewName $($using:thisSystem) -Force -WarningAction SilentlyContinue
                 return $true
             }
             Else { return $false }
         }
 
         if ($RebootIsNeeded) {
-            [Console]::WriteLine("Rebooting $($thisVM.Name) to complete hostname change")
-            Reset-AzStackVMs -Restart -Wait -VMs $thisVM
+            [Console]::WriteLine("Rebooting $($thisSystem) to complete hostname change")
+            Reset-AzStackVMs -Restart -Wait -VMs (Get-VM $thisSystem)
         }
     }
 
@@ -1024,7 +1025,7 @@ Function Initialize-AzureStackHCILabOrchestration {
         Invoke-Command -VMName $thisSystem -Credential $VMCred -ScriptBlock {
             $thisLabConfig = $using:LabConfig
 
-            Set-DnsServerPrimaryZone -Name "$($LabConfig.DomainName)" -DynamicUpdate "NonsecureAndSecure"
+            Set-DnsServerPrimaryZone -Name "$($thisLabConfig.DomainName)" -DynamicUpdate "NonsecureAndSecure"
 
             #Note: Using the $using:VMCred does not work here. Need to create the credential on the remote machine.
             $pass   = ConvertTo-SecureString $($thisLabConfig.AdminPassword) -AsPlainText -Force
@@ -1095,26 +1096,39 @@ Function Initialize-AzureStackHCILabOrchestration {
         $thisVM = $_
         $BaseDiskACL = Get-ACL $VHDPath
 
-        If (Get-Item "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue){
-            Remove-VMHardDiskDrive -VMName $thisVM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI -ErrorAction SilentlyContinue
+        $OSDDisk      = Get-VHD "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue
+
+        If ($OSDDisk) {
             #TODO: Readd disk at the beginning of the initialize in case this is restarted after remove vmharddisk occurs. Look for either OSD or merged disk
-            $OSDDisk      = Get-VHD "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue
+            Remove-VMHardDiskDrive -VMName $thisVM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI -ErrorAction SilentlyContinue
             $BaseDiskPath = $OSDDisk.ParentPath
 
             Set-ACL  -Path $BaseDiskPath -AclObject $BaseDiskACL
             Set-ItemProperty -Path $BaseDiskPath -Name IsReadOnly -Value $false
 
-            [Console]::WriteLine("`t Beginning VHDX Merge for $($thisVM.Name)")
-            Start-RSJob -Name "$($thisVM.Name)-BaseDiskMerge" -ScriptBlock {
-                $OSDDiskPath = $Using:OSDDisk
-                Merge-VHD -Path $($OSDDisk.Path) -DestinationPath $($using:BaseDiskPath)
-            } -OutVariable +RSJob | Out-Null
+            #TODO: This is not working for all systems. AzStackHCI04 does not merge (all others do).
+            #[Console]::WriteLine("`t Beginning VHDX Merge for $($thisVM.Name)")
+            #Start-RSJob -Name "$($thisVM.Name)-BaseDiskMerge" -ScriptBlock {
+            #    $OSDDiskPath = $Using:OSDDisk
+            #    Merge-VHD -Path $($OSDDisk.Path) -DestinationPath $($using:BaseDiskPath)
+            #} -OutVariable +RSJob | Out-Null
         }
         Else { [Console]::WriteLine("`t $($thisVM.Name) VHDX has already been merged - backslash ignore") }
     }
 
-    Wait-RSJob   $RSJob | Out-Null
-    Remove-RSJob $RSJob | Out-Null
+    $AllVMs | ForEach-Object {
+        $thisVM = $_
+
+        $OSDDisk      = Get-VHD "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue
+        If ($OSDDisk) {
+            $BaseDiskPath = $OSDDisk.ParentPath
+            Merge-VHD -Path $($OSDDisk.Path) -DestinationPath $($BaseDiskPath)
+        }
+        Else { [Console]::WriteLine("`t $($thisVM.Name) VHDX has already been merged - backslash ignore") }
+    }
+
+    #Wait-RSJob   $RSJob | Out-Null
+    #Remove-RSJob $RSJob | Out-Null
 
     $AllVMs | ForEach-Object {
         $thisVM = $_
@@ -1127,6 +1141,7 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     Reset-AzStackVMs -Start -VMs $AllVMs -Wait
 
+    # This must be done after the ghost NICs have been removed and a full shutdown has occurred. Since merge is our only full shutdown, this section must stay after the merge
     Set-AzureStackHCIVMAdapters
 
     Write-Host '\\\ Completed Environment Setup  ///'
