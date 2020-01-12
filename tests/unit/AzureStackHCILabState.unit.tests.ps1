@@ -1,5 +1,10 @@
-Describe 'Host Validation' -Tags Host {
+Describe 'Validation' -Tags Host {
     Context HostOS {
+        It "This module must be launched with administrator permissions" {
+            $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+            $isAdmin | Should Be $true
+        }
+
         $NodeOS = Get-CimInstance -ClassName 'Win32_OperatingSystem'
 
         ### Verify the Host is sufficient version
@@ -52,7 +57,9 @@ Describe 'Host Validation' -Tags Host {
                 }
             }
         }
+    }
 
+    Context 'Lab Configuration (Get-AzureStackHCILabConfig)' {
         If ($LabConfig.ContainsKey('ServerISO') -and $LabConfig.ContainsKey('BaseVHDX')) {
             It "${env:ComputerName} LabConfig should not specify both BaseVHDX and ServerISO properties" { $true | Should be $false }
         }
@@ -65,9 +72,21 @@ Describe 'Host Validation' -Tags Host {
             }
         }
         ElseIf ($LabConfig.BaseVHDX) {
-            It "${env:ComputerName} the specified VHDX from LabConfig.BaseVHDX must exist" {
+            It "(Get-AzureStackHCILabConfig) The specified VHDX from LabConfig.BaseVHDX must actually exist" {
                 Test-Path $LabConfig.BaseVHDX | Should be $true
             }
+        }
+
+        It "(Get-AzureStackHCILabConfig) Should have at least one machine with role 'WAC'" {
+            ($LabConfig.VMs.Where{$_.Role -eq 'WAC'}).Count | Should BeGreaterOrEqual 1
+        }
+
+        It "(Get-AzureStackHCILabConfig) Should have at least one machine with role 'Domain Controller'" {
+            ($LabConfig.VMs.Where{$_.Role -eq 'Domain Controller'}).Count | Should BeGreaterOrEqual 1
+        }
+
+        It "(Get-AzureStackHCILabConfig) Should have at least two machines with role 'AzureStackHCI'" {
+            ($LabConfig.VMs.Where{$_.Role -eq 'AzureStackHCI'}).Count | Should BeGreaterOrEqual 2
         }
     }
 }

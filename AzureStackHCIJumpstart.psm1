@@ -1001,19 +1001,24 @@ Function Initialize-AzureStackHCILabOrchestration {
         $thisVM = $_
         $RebootIsNeeded = Invoke-Command -VMName $thisVM.Name -Credential $localCred -ScriptBlock {
             if ($env:COMPUTERNAME -ne $using:thisVM.Name) {
-                Rename-Computer -NewName $($using:thisVM.Name) -Force
+                Rename-Computer -NewName $($using:thisVM.Name) -Force -WarningAction SilentlyContinue
                 return $true
             }
             Else { return $false }
         }
 
-        if ($RebootIsNeeded) { Reset-AzStackVMs -Restart -Wait -VMs $thisVM }
+        if ($RebootIsNeeded) {
+            [Console]::WriteLine("Rebooting $($thisVM.Name) to complete hostname change")
+            Reset-AzStackVMs -Restart -Wait -VMs $thisVM
+        }
     }
 
     Wait-ForAzureStackHCIDomain
 
     $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' } | Foreach-Object {
         $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
+
+        Write-Host 'Configuring DHCPs DNS Update Credentials and removing old computer accounts if they exist'
 
         $ErrorActionPreference = 'SilentlyContinue'
         Invoke-Command -VMName $thisSystem -Credential $VMCred -ScriptBlock {
@@ -1090,24 +1095,22 @@ Function Initialize-AzureStackHCILabOrchestration {
         $thisVM = $_
         $BaseDiskACL = Get-ACL $VHDPath
 
-        #TODO: There's an issue (appears to be strangely happening on node 2) that stops the OSD from being added
-        Start-RSJob -Name "$($thisVM.Name)-MergeAndACL" -ScriptBlock {
-            $thisJobVM = $using:thisVM
+        If (Get-Item "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue){
+            Remove-VMHardDiskDrive -VMName $thisVM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI -ErrorAction SilentlyContinue
+            #TODO: Readd disk at the beginning of the initialize in case this is restarted after remove vmharddisk occurs. Look for either OSD or merged disk
+            $OSDDisk      = Get-VHD "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue
+            $BaseDiskPath = $OSDDisk.ParentPath
 
-            $VHDXToConvert = $thisJobVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0
-            $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
+            Set-ACL  -Path $BaseDiskPath -AclObject $BaseDiskACL
+            Set-ItemProperty -Path $BaseDiskPath -Name IsReadOnly -Value $false
 
-            if ($BaseDiskPath.Length -gt 0) {
-                [Console]::WriteLine("`t Beginning VHDX Merge for $($thisJobVM.Name)")
-
-                Set-ACL  -Path $BaseDiskPath -AclObject $using:BaseDiskACL
-                Set-ItemProperty -Path $BaseDiskPath -Name IsReadOnly -Value $false
-                Remove-VMHardDiskDrive -VMName $thisJobVM.Name -ControllerNumber 0 -ControllerLocation 0 -ControllerType SCSI
-
-                Merge-VHD -Path $VHDXToConvert.Path -DestinationPath $BaseDiskPath
-            }
-            Else { [Console]::WriteLine("`t $($thisJobVM.Name) VHDX has already been merged - backslash Ignore") }
-        } -OutVariable +RSJob | Out-Null
+            [Console]::WriteLine("`t Beginning VHDX Merge for $($thisVM.Name)")
+            Start-RSJob -Name "$($thisVM.Name)-BaseDiskMerge" -ScriptBlock {
+                $OSDDiskPath = $Using:OSDDisk
+                Merge-VHD -Path $($OSDDisk.Path) -DestinationPath $($using:BaseDiskPath)
+            } -OutVariable +RSJob | Out-Null
+        }
+        Else { [Console]::WriteLine("`t $($thisVM.Name) VHDX has already been merged - backslash ignore") }
     }
 
     Wait-RSJob   $RSJob | Out-Null
@@ -1116,26 +1119,15 @@ Function Initialize-AzureStackHCILabOrchestration {
     $AllVMs | ForEach-Object {
         $thisVM = $_
 
-        $MergedBaseDisk = "$($thisVM.Path)\Virtual Hard Disks\$($VHDPath.Split('\') | Select -Last 1)"
-
-        If (-not($OSDDisk)) {
-            Add-VMHardDiskDrive -VM $thisVM -Path $MergedBaseDisk -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -ErrorAction SilentlyContinue
-        }
-
-        # Now that the S2D Disks and NICs have been re-added make sure to change the boot order again.
-        $OSD = Get-VMHardDiskDrive -VMName $thisVM.Name -ControllerNumber 0 -ControllerLocation 0
+        $MergedBaseDisk = "$($thisVM.Path)\Virtual Hard Disks\$($VHDPath.Split('\') | Select-Object -Last 1)"
+        $OSD = Add-VMHardDiskDrive -VM $thisVM -Path $MergedBaseDisk -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Passthru -ErrorAction SilentlyContinue
         Set-VMFirmware  -VMName $thisVM.Name -BootOrder $OSD
     }
 #endregion
 
-#region In-guest customization
-    # Once merged, start VMs, then continue configuration inside the guest.
-    # Previous tasks needed the shutdown/reboot anyway e.g. domain join and ghost NIC removal
-
     Reset-AzStackVMs -Start -VMs $AllVMs -Wait
 
     Set-AzureStackHCIVMAdapters
-#endregion
 
     Write-Host '\\\ Completed Environment Setup  ///'
     Write-Host '/// Starting checkpoint creation \\\'
@@ -1147,12 +1139,8 @@ Function Initialize-AzureStackHCILabOrchestration {
 
 <#TODO: Cleanup todos!
 - Test that labconfig is available and not malformed
-- Add tests, at least one machine with the role domain controller
-- at least 2 machines with the AzureStackHCI role
-- only remove disks if they are greater than 4096 KB
 - Only remove NICs if list is different than config file?
 
-- If AD Accounts already exist, the rename doesn't work...
 - Once Complete, test that VMs have correct names
 
 - Enable MAC Spoofing on the HV Ethernet vmNICs

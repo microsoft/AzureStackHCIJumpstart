@@ -538,8 +538,6 @@ Function Wait-ForAzureStackHCIDomain {
             Get-DSCLocalConfigurationManager -ErrorAction SilentlyContinue
         } -Credential $localCred -ErrorAction SilentlyContinue
 
-# LCM State: PendingConfiguration
-# LCM Detail Blank
         if ($DscConfigurationStatus.Status -ne 'Success') {
             Write-Host "`t Domain Controller Configuration in Progress. Sleeping for 20 seconds."
 
@@ -548,13 +546,11 @@ Function Wait-ForAzureStackHCIDomain {
                 Write-Host "`t `t LCM State : $($DSCLocalConfigurationManager.LCMState)"
                 Write-Host "`t `t LCM Detail: $($DSCLocalConfigurationManager.LCMStateDetail) `n"
 
-                If ($($DSCLocalConfigurationManager.LCMState) -eq 'PendingConfiguration' -and $($DSCLocalConfigurationManager.LCMStateDetail) -eq $null) {
-                    $RebootCounter ++
-                }
+                If ($($DSCLocalConfigurationManager.LCMState) -eq 'PendingConfiguration') { $RebootCounter ++ }
 
-                If ($RebootCounter -eq 10) {
+                If ($RebootCounter -eq 3) {
                     Stop-VM  -VMName $DCName -Force
-                    Start-VM -VMName $DCName -Force
+                    Start-VM -VMName $DCName
 
                     $RebootCounter = 0
                 }
