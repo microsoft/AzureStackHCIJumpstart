@@ -1036,8 +1036,15 @@ Function Initialize-AzureStackHCILabOrchestration {
             $thisLabConfig.VMs.Where{ $_.Role -ne 'Domain Controller'} | ForEach-Object {
                 $thisVM = "$($thisLabConfig.Prefix)$($_.VMName)"
 
-                # This will be blank if the system is not already renamed
-                $thisVMComputerSystem = Get-CimInstance -CimSession $thisVM -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
+                # This will be blank if the system is not already renamed - try 3x to see if the machine is online
+                $Counter = 0
+                While ($Counter -ne 3 -or $thisVMComputerSystem -eq $null) {
+                    $thisVMComputerSystem = Get-CimInstance -CimSession $thisVM -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 5
+                    $Counter ++
+                }
+
+                Remove-Variable Counter -ErrorAction SilentlyContinue
 
                 # If the machine is part of the domain and named properly, leave the account alone
                 # If the machine is not part of the domain, remove any existing accounts that match the name as this will prevent domain join: the account already exists
