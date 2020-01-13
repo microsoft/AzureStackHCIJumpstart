@@ -1034,23 +1034,29 @@ Function Initialize-AzureStackHCILabOrchestration {
             Set-DhcpServerDnsCredential -ComputerName AzStackHCIDC01 -Credential $VMCred
 
             $thisLabConfig.VMs.Where{ $_.Role -ne 'Domain Controller'} | ForEach-Object {
+                $VerbosePreference='Continue'
                 $thisVM = "$($thisLabConfig.Prefix)$($_.VMName)"
 
-                # This will be blank if the system is not already renamed - try 3x to see if the machine is online
-                $Counter = 0
-                While ($Counter -ne 3 -or $thisVMComputerSystem -eq $null) {
+                # This will be blank if the system is not already renamed - try 2x to see if the machine is online
+                $Counter = 1
+                While ($Counter -ne 2 -and $thisVMComputerSystem -eq $null) {
+                    Write-Verbose "Counter: $Counter"
+
                     $thisVMComputerSystem = Get-CimInstance -CimSession $thisVM -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
-                    Start-Sleep -Seconds 5
-                    $Counter ++
+                    if ($thisVMComputerSystem -eq $null) { $Counter ++ }
                 }
 
-                Remove-Variable Counter -ErrorAction SilentlyContinue
+                if (-not ($thisVMComputerSystem)) {
+                    Write-Verbose "Could not verify if $($thisVM) was alive. If a computer account exists in Active Directory with this name, it will be removed."
+                }
 
                 # If the machine is part of the domain and named properly, leave the account alone
                 # If the machine is not part of the domain, remove any existing accounts that match the name as this will prevent domain join: the account already exists
                 if ($thisVMComputerSystem.PartOfDomain -ne $true) {
                     Get-ADObject -Filter {Name -eq $thisVM} | Remove-ADObject -Recursive -Confirm:$false
                 }
+
+                Remove-Variable Counter -ErrorAction SilentlyContinue
             }
 
             $ClusterNameIsOnline = Test-NetConnection $($thisLabConfig.Prefix) -InformationLevel Quiet -WarningAction SilentlyContinue
