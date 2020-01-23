@@ -54,8 +54,8 @@ function Wait-ForHeartbeatState {
 
                     if (-not ($IgnoreLoopCount)) { $TimesThroughLoop ++ }
 
-                    # Give machines 1 minute to startup if $IgnoreLoopCount -eq $false;
-                    if ($TimesThroughLoop -eq 12) {
+                    # Give machines 2.5 minutes to startup if $IgnoreLoopCount -eq $false;
+                    if ($TimesThroughLoop -eq 30) {
                         [Console]::WriteLine("`t `t $($_.Name) may be in broken state. Trying to recover by restarting")
                         [Console]::WriteLine("`t `t `t If this continually occurs, this could either indicate an issue with the VM or its taking a long time to start the system")
                         [Console]::WriteLine("`t `t `t - Consider lengthening this timeout (in the helpers file) if the latter")

@@ -832,7 +832,9 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     $DCName = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
     $DC     = Get-VM -VMName "$($LabConfig.Prefix)$($DCName.VMName)" -ErrorAction SilentlyContinue
-    Reset-AzStackVMs -Start -VMs $DC -Wait
+    Reset-AzStackVMs -Start -VMs $DC
+    Wait-ForHeartbeatState -State On -VMs $VMs -IgnoreLoopCount #Note: Added for slow systems to give more time to startup
+
 
     $timer = Get-Date
     "Completed Domain Controller VM initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
