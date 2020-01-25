@@ -833,7 +833,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     $DCName = $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' }
     $DC     = Get-VM -VMName "$($LabConfig.Prefix)$($DCName.VMName)" -ErrorAction SilentlyContinue
     Reset-AzStackVMs -Start -VMs $DC
-    Wait-ForHeartbeatState -State On -VMs $VMs -IgnoreLoopCount #Note: Added for slow systems to give more time to startup
+    Wait-ForHeartbeatState -State On -VMs $DC -IgnoreLoopCount #Note: Added for slow systems to give more time to startup
 
 
     $timer = Get-Date
