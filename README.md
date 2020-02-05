@@ -9,6 +9,20 @@ There are several unique configurations that makes testing the deployment UI in 
 
 For more details on what this does, please see [What it does in a little more depth](#What-it-does-in-a-little-more-depth)
 
+## What's New - Version 2020.1.1.3
+
+Minor update to allow you to specify the BaseVHDX or ServerISO property at runtime (instead of in the config file). E.g. you can set these params in the config file or:
+
+```powershell
+    Initialize-AzureStackHCILabOrchestration -BaseVHDX 'c:\SomeFolder\Base.VHDX'
+```
+
+```powershell
+    Initialize-AzureStackHCILabOrchestration -ServerISO 'c:\SomeFolder\Server.ISO'
+```
+
+Specifying at runtime will overwrite the value in the Get-AzureStackHCILabConfig.
+
 ## What's New - Version 2020.1.1.2
 
 The latest version added:
@@ -33,7 +47,19 @@ Once this module is in the PowerShell gallery, use ```Install-Module AzureStackH
 
 ## Required Configuration
 
-By default, you must provide a ISO or a VHDX which will be used to install VMs. You need to provide only one these and update that **one** value to create the lab.
+By default, you must provide a ISO or a VHDX which will be used to install VMs. You need to provide only one these and update that **one** value to create the lab. To do this follow one of the following methods:
+
+### Option 1: Specify at runtime
+
+```powershell
+    Initialize-AzureStackHCILabOrchestration -BaseVHDX 'c:\SomeFolder\Base.VHDX'
+```
+
+```powershell
+    Initialize-AzureStackHCILabOrchestration -ServerISO 'c:\SomeFolder\Server.ISO'
+```
+
+### Option 2: Specify in Get-AzureStackHCILabConfig
 
 1. Open **.\AzureStackHCIJumpstart\AzureStackHCIJumpstart.psm1**
 
@@ -46,6 +72,8 @@ By default, you must provide a ISO or a VHDX which will be used to install VMs. 
         2. `BaseVHDX` This is a VHDX with a Windows OS image installed
 
     b. You can experiment using existing VMs rather than having the lab create them however you still need to provide either the `ServerISO` or the `BaseVHDX` file path. Instructions for using your own VMs are out of scope.
+
+    **Note: If you make changes to the module, you must re-import before the changes will be realized. Use: ipmo .\AzureStackHCIJumpstart.psd1 -Force
 
 3. Run `Initialize-AzureStackHCILabOrchestration`
 

@@ -17,6 +17,7 @@ Function Get-AzureStackHCILabConfig {
         # This is the filepath to the ISO that will be used to deploy the lab VMs
         #ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
+        # This is the filepath to the BaseDisk that will be used to deploy the lab VMs
         BaseVHDX    = 'C:\DataStore\CustomVHD\RS_PRERELEASE_19531.1000.191204-1324_server_en-us_vl_Full.vhdx'
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
@@ -734,6 +735,18 @@ Function Initialize-AzureStackHCILabOrchestration {
 
         For more information, please see: gitHub.com/Microsoft/AzureStackHCIJumpstart
 
+    .PARAMETER BaseVHDX
+        This is the filepath to the BaseVHDX that will be used to deploy the lab VMs
+
+        You must specify either the BaseVHDX or the ServerISO property either at runtime using these
+        parameters or manually in the Get-AzureStackHCILabConfig directly
+
+    .PARAMETER ServerISO
+        This is the filepath to the ISO that will be used to deploy the lab VMs
+
+        You must specify either the BaseVHDX or the ServerISO property either at runtime using these
+        parameters or manually in the Get-AzureStackHCILabConfig directly
+
     .EXAMPLE
         For examples, please see: gitHub.com/Microsoft/AzureStackHCIJumpstart
 
@@ -745,6 +758,16 @@ Function Initialize-AzureStackHCILabOrchestration {
         More projects : https://aka.ms/HCI-Deployment
         Email Address : HCI-Deployment@Microsoft.com
 #>
+
+    [cmdletbinding(DefaultParameterSetName = 'BaseVHDX')]
+
+    Param (
+        [Parameter(ParameterSetName = 'BaseVHDX')]
+        [string] $BaseVHDX,
+
+        [Parameter(ParameterSetName = 'ServerISO')]
+        [string] $ServerISO
+    )
 
     Clear-Host
 
@@ -785,7 +808,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     Remove-RSJob $RSJob | Out-Null
 
     Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" -Exclude PoshRSJob | foreach-Object {
-            Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
+        Import-Module -Name $_ -Force -Global -ErrorAction SilentlyContinue
     }
 #endregion
 
@@ -793,6 +816,17 @@ Function Initialize-AzureStackHCILabOrchestration {
     Import-Module $helperPath -Force
 
     $global:LabConfig = Get-AzureStackHCILabConfig
+
+    # Make sure that if BaseVHDX or ServerISO was specified at the prompt that we use that version.
+    # Otherwise, use the version in the Config (Get-AzureStackHCILabConfig)
+    if ($PSBoundParameters.ContainsKey('BaseVHDX')) {
+        $LabConfig.Remove('BaseVHDX')
+        $LabConfig.BaseVHDX += $BaseVHDX
+    }
+    ElseIf ($PSBoundParameters.ContainsKey('ServerISO')) {
+        $LabConfig.Remove('ServerISO')
+        $LabConfig.ServerISO += $ServerISO
+    }
 
     #TODO: If VMs already exist, return them to stage0 snapshot and delete the snapshots before continuing
 
