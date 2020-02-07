@@ -956,7 +956,7 @@ Function Initialize-AzureStackHCILabOrchestration {
 
             $VHDXExtension = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Extension
             if ($VHDXExtension -ne '.avhdx') {
-                While ($thisVMOSDLength -le 750MB) {
+                While ($thisVMOSDLength -le 600MB) {
                     $thisVMOSDLength = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Length
                     Start-Sleep -Seconds 5
                 }
@@ -1078,7 +1078,7 @@ Function Initialize-AzureStackHCILabOrchestration {
                 While ($Counter -ne 2 -and $thisVMComputerSystem -eq $null) {
                     Write-Verbose "Counter: $Counter"
 
-                    $thisVMComputerSystem = Get-CimInstance -CimSession $thisVM -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
+                    $thisVMComputerSystem = Get-CimInstance -CimSession $thisVM -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue -Verbose:$false
                     if ($thisVMComputerSystem -eq $null) { $Counter ++ }
                 }
 
