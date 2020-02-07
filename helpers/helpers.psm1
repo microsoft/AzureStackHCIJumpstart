@@ -232,7 +232,7 @@ Function Initialize-BaseDisk {
 
         If ( $MountedDisk ) {
             $DriveLetter = $(Get-DiskImage -ImagePath $VHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
-            $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter).sizeMax
+            $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter -ErrorAction SilentlyContinue).sizeMax
 
             #TODO: Make sure not the same size as the drives included in LabConfig
             Switch ($MaxSize) {
@@ -244,7 +244,7 @@ Function Initialize-BaseDisk {
                     $MountedDisk = Mount-DiskImage -ImagePath $VHDPath -StorageType VHDX -ErrorAction SilentlyContinue
                     $DriveLetter = $(Get-DiskImage -ImagePath $VHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
 
-                    Resize-Partition -DriveLetter $DriveLetter -Size (100GB)
+                    Resize-Partition -DriveLetter $DriveLetter -Size $MaxSize -ErrorAction SilentlyContinue
                 }
             }
 

@@ -1071,20 +1071,19 @@ Function Initialize-AzureStackHCILabOrchestration {
             Set-DhcpServerDnsCredential -ComputerName AzStackHCIDC01 -Credential $VMCred
 
             $thisLabConfig.VMs.Where{ $_.Role -ne 'Domain Controller'} | ForEach-Object {
-                $VerbosePreference='Continue'
+                $VerbosePreference = 'Continue'
                 $thisVM = "$($thisLabConfig.Prefix)$($_.VMName)"
 
                 # This will be blank if the system is not already renamed - try 2x to see if the machine is online
                 $Counter = 1
                 While ($Counter -ne 2 -and $thisVMComputerSystem -eq $null) {
-                    Write-Verbose "Counter: $Counter"
-
                     $thisVMComputerSystem = Get-CimInstance -CimSession $thisVM -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue -Verbose:$false
                     if ($thisVMComputerSystem -eq $null) { $Counter ++ }
                 }
 
                 if (-not ($thisVMComputerSystem)) {
                     Write-Verbose "Could not verify if $($thisVM) was alive. If a computer account exists in Active Directory with this name, it will be removed."
+                    $VerbosePreference = 'SilentlyContinue'
                 }
 
                 # If the machine is part of the domain and named properly, leave the account alone
