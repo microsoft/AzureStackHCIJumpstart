@@ -228,18 +228,29 @@ Function Initialize-BaseDisk {
 
     If ( Test-Path $VHDPath ) {
         Dismount-DiskImage -ImagePath $VHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
-        $MountedDisk = Mount-DiskImage    -ImagePath $VHDPath -StorageType VHDX -ErrorAction SilentlyContinue
+        $MountedDisk = Mount-DiskImage -ImagePath $VHDPath -StorageType VHDX -ErrorAction SilentlyContinue
 
         If ( $MountedDisk ) {
             $DriveLetter = $(Get-DiskImage -ImagePath $VHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
-            $MountPath = "$($DriveLetter):" -replace ' '
+            $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter).sizeMax
 
             #TODO: Make sure not the same size as the drives included in LabConfig
-            Switch ($MountedDisk.Size) {
-                {$_ -le 100GB} {
-                    Resize-Partition -DriveLetter $MountPath -Size (100GB)
+            Switch ($MaxSize) {
+                {$_ -lt 100GB} {
+                    Dismount-DiskImage -ImagePath $VHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+                    Resize-VHD -Path $VHDPath -SizeBytes (100GB)
+
+                    #Note: Redo all this stuff in case the drive letters changed
+                    $MountedDisk = Mount-DiskImage -ImagePath $VHDPath -StorageType VHDX -ErrorAction SilentlyContinue
+                    $DriveLetter = $(Get-DiskImage -ImagePath $VHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
+
+                    Resize-Partition -DriveLetter $DriveLetter -Size (100GB)
                 }
             }
+
+            Remove-Variable MaxSize -ErrorAction SilentlyContinue
+            $MountPath = "$($DriveLetter):" -replace ' '
+
 
             If ( Test-Path "$MountPath\Windows\Panther\unattend.xml" ) {
                 Write-Host "`t Unattend file exists..."
