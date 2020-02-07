@@ -77,6 +77,7 @@ Function Get-AzureStackHCILabConfig {
             }
         )
 
+        #TODO: Add flag to specify the path to the W10 media if not to use Server
         # This should always be WAC
         Role = 'WAC'
     }
