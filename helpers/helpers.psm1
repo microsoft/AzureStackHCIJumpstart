@@ -472,6 +472,7 @@ Function Add-LabVirtualMachines {
 
         Rename-NetAdapter -Name "*$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -NewName "NATGW-$($LabConfig.Prefix)-$($LabConfig.Switchname)"
 
+        #TODO: This doesn't work if this is already in use, OR if we've already deployed another environment on this node
         $GatewayIP = "$($LabConfig.DHCPscope.Substring(0,$LabConfig.DHCPscope.Length-1))1"
         New-NetIPAddress -IPAddress $GatewayIP -PrefixLength 24 -InterfaceAlias "NATGW-$($LabConfig.Prefix)-$($LabConfig.Switchname)" | Out-Null
     }
