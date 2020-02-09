@@ -141,7 +141,23 @@ New:
     Initialize-AzureStackHCILabOrchestration
 ```
 
-## Restore the whole lab to a stage
+## Snapshot stages of the lab
+
+You can use the snapshot commands to "fast-forward" your lab to a particular stage. You can use this for example if you don't want to worry about testing Stages 1 (feature installation), 2 (Networking) or 3 (Clustering), but do want to test stage 4 (S2D), and Stage 5 (SDN).
+
+Following the deployment of the lab, use the following commands to take snapshots of the lab. This command supports snapshots for stage 0 (fresh install) through stage 4
+
+```PowerShell
+    New-AzureStackHCIStageSnapshot -Stage 0
+```
+
+```PowerShell
+    New-AzureStackHCIStageSnapshot -Stage 1
+```
+
+...etc...
+
+## Restore the lab to a stage
 
 While you can restore the snapshots manually, this ensures that all machines are on the correct snapshot with one command (potentially including the domain controller)
 
