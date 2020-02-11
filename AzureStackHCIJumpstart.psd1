@@ -12,7 +12,7 @@
     RootModule        = 'AzureStackHCIJumpstart.psm1'
 
     # Version number of this module.
-    ModuleVersion     = '2020.1.1.3'
+    ModuleVersion     = '2020.2.10.0'
 
     # Supported PSEditions
     # CompatiblePSEditions = @()
