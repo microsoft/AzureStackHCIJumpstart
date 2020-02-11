@@ -32,6 +32,10 @@ If ($PowerShellModules -contains 'FailoverClusters') {
 
 $BuildSystem = Get-CimInstance -ClassName 'Win32_OperatingSystem'
 
+$PowerShellModules | Foreach-Object {
+    Write-Host "Module List: $_"
+}
+
 ForEach ($Module in $PowerShellModules) {
     Write-Host "Module Name: $Module"
     If ($Module -eq 'FailoverClusters') {
