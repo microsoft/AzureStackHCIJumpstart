@@ -1,3 +1,6 @@
+[![Build status](https://ci.appveyor.com/api/projects/status/y6682ir5f5nj28in?svg=true)](https://ci.appveyor.com/project/MSFTCoreNet/AzureStackHCIJumpstart)
+[![downloads](https://img.shields.io/powershellgallery/dt/AzureStackHCIJumpstart.svg?label=downloads)](https://www.powershellgallery.com/packages/AzureStackHCIJumpstart)
+
 # Jumpstart your Azure Stack HCI Lab
 
 This module is intended to deploy a **lab environment** for testing Azure Stack HCI - specifically using the deployment UI in Windows Admin Center. With this module, you can test your Azure Stack HCI deployment in VMs, on a single host, and **emulate** various configurations including:

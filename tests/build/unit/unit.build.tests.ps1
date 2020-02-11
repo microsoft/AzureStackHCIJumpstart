@@ -10,13 +10,6 @@ Describe "$($env:repoName)-Manifest" {
         It "[Test-ModuleManifest] - $($env:repoName).psd1 should not be empty" {
             $TestModule | Should Not BeNullOrEmpty
         }
-
-        Import-Module .\$($env:repoName).psd1 -Force -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-        $command = Get-Command $($env:repoName) -ErrorAction SilentlyContinue
-
-        It "Should have the $($env:repoName) function available" {
-            $command | Should not BeNullOrEmpty
-        }
     }
 
     Context "Required Modules" {
@@ -36,20 +29,25 @@ Describe "$($env:repoName)-Manifest" {
     Context ExportedContent {
         $testCommand = Get-Command Convert-LBFO2SET
 
-        It 'Should default the LBFOTeam mandatory param' {
-            Get-Command Convert-LBFO2SET | Should -HaveParameter LBFOTeam -Mandatory
+        It 'Should have the BaseVHDX param' {
+            Get-Command Initialize-AzureStackHCILabOrchestration | Should -HaveParameter BaseVHDX -Not -Mandatory
         }
 
-        It 'Should default the SETTeam param to $false' {
-            Get-Command Convert-LBFO2SET | Should -HaveParameter SETTeam -Mandatory
+        It 'Should have the ServerISO param' {
+            Get-Command Initialize-AzureStackHCILabOrchestration | Should -HaveParameter ServerISO -Not -Mandatory
         }
 
-        It 'Should default the AllowOutage param to $false' {
-            Get-Command Convert-LBFO2SET | Should -HaveParameter AllowOutage -DefaultValue $false
-        }
+        Import-Module .\$($env:repoName).psd1 -Force -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
 
-        It 'Should default the EnableBestPractices param to $false' {
-            Get-Command Convert-LBFO2SET | Should -HaveParameter EnableBestPractices -DefaultValue $false
+        'Get-AzureStackHCILabConfig',
+        'Remove-AzureStackHCILabEnvironment',
+        'New-AzureStackHCIStageSnapshot',
+        'Restore-AzureStackHCIStageSnapshot',
+        'Remove-AzureStackHCIStageSnapshot',
+        'Initialize-AzureStackHCILabOrchestration' | ForEach-Object {
+            It "Should have the $($env:repoName) function available" {
+                $_ | Should not BeNullOrEmpty
+            }
         }
     }
 }
