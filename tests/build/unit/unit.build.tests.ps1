@@ -27,6 +27,8 @@ Describe "$($env:repoName)-Manifest" {
     }
 
     Context ExportedContent {
+        Import-Module .\$($env:repoName).psd1 -Force
+
         It 'Should have the BaseVHDX param' {
             Get-Command Initialize-AzureStackHCILabOrchestration | Should -HaveParameter BaseVHDX -Not -Mandatory
         }
