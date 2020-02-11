@@ -53,6 +53,8 @@ Description = 'Helps deploy the Azure Stack HCI Deployment labs'
 # Modules that must be imported into the global environment prior to importing this module
 RequiredModules = @(
     @{ModuleName = 'NetworkingDSC'; ModuleVersion = '7.4.0.0' },
+    @{ModuleName = 'xDNSServer'; ModuleVersion = '1.15.0.0' },
+    @{ModuleName = 'xDHCPServer'; ModuleVersion = '2.0.0.0' },
     @{ModuleName = 'Pester'; ModuleVersion = '4.9.0' }
 )
 
