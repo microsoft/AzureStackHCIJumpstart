@@ -59,6 +59,9 @@ Function Get-AzureStackHCILabConfig {
         VMName = 'WAC01'
         MemoryStartupBytes = 4GB
 
+        # Optional BaseDisk path for WAC - Intended to allow a W10 WAC System
+        W10BaseVHDX    = 'C:\DataStore\CustomVHD\RS_PRERELEASE_19531.1000.191204-1324_server_en-us_vl_Full.vhdx'
+
         # Accept folders of MSI's or a specific MSI
         MSIInstaller = @(
             @{ Path = 'c:\datastore\folderA' } ,
@@ -789,11 +792,6 @@ Function Initialize-AzureStackHCILabOrchestration {
 
 #region Temporary until; added to posh gallery
     Write-Host "Importing Modules from: $here\helpers"
-    Copy-Item -Path "$here\helpers\ModulesTillPublishedonGallery\PoshRSJob" -Recurse -Destination "C:\Program Files\WindowsPowerShell\Modules\PoshRSJob" -Container -ErrorAction SilentlyContinue | Out-Null
-    Import-Module -Name PoshRSJob -Force -Global -ErrorAction SilentlyContinue
-
-    # If there were prior RSJobs, remove them
-    Get-RSJob | Remove-RSJob
 
     Get-ChildItem "$here\helpers\ModulesTillPublishedonGallery" -Exclude PoshRSJob | foreach-Object {
         $thisModule = $_
