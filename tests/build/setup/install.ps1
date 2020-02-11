@@ -8,7 +8,6 @@ Invoke-AppveyorInstallTask
 
 $ModuleManifest = Test-ModuleManifest .\$($env:RepoName).psd1 -ErrorAction SilentlyContinue
 $repoRequiredModules = $ModuleManifest.RequiredModules.Name
-$repoRequiredModules += $ModuleManifest.PrivateData.PSData.ExternalModuleDependencies
 
 If ($repoRequiredModules) { $PowerShellModules += $repoRequiredModules }
 
@@ -32,12 +31,7 @@ If ($PowerShellModules -contains 'FailoverClusters') {
 
 $BuildSystem = Get-CimInstance -ClassName 'Win32_OperatingSystem'
 
-$PowerShellModules | Foreach-Object {
-    Write-Host "Module List: $_"
-}
-
 ForEach ($Module in $PowerShellModules) {
-    Write-Host "Module Name: $Module"
     If ($Module -eq 'FailoverClusters') {
         Switch -Wildcard ($BuildSystem.Caption) {
             '*Windows 10*' {
@@ -61,8 +55,6 @@ ForEach ($Module in $PowerShellModules) {
     else {
         Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber
     }
-
-    Write-Host "Finished install of: $Module"
 
     Import-Module $Module
 }
