@@ -27,8 +27,6 @@ Describe "$($env:repoName)-Manifest" {
     }
 
     Context ExportedContent {
-        $testCommand = Get-Command Convert-LBFO2SET
-
         It 'Should have the BaseVHDX param' {
             Get-Command Initialize-AzureStackHCILabOrchestration | Should -HaveParameter BaseVHDX -Not -Mandatory
         }
