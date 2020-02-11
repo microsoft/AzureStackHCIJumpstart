@@ -3,7 +3,8 @@ git.exe clone -q https://github.com/PowerShell/DscResource.Tests
 Import-Module -Name "$env:APPVEYOR_BUILD_FOLDER\DscResource.Tests\AppVeyor.psm1"
 Invoke-AppveyorInstallTask
 
-[string[]]$PowerShellModules = @("Pester", 'posh-git', 'psake', 'poshspec', 'PSScriptAnalyzer')
+# Add pester here if not included in the RequiredModules portion of the module manifest
+[string[]]$PowerShellModules = @('posh-git', 'psake', 'poshspec', 'PSScriptAnalyzer')
 
 $ModuleManifest = Test-ModuleManifest .\$($env:RepoName).psd1 -ErrorAction SilentlyContinue
 $repoRequiredModules = $ModuleManifest.RequiredModules.Name
@@ -32,6 +33,7 @@ If ($PowerShellModules -contains 'FailoverClusters') {
 $BuildSystem = Get-CimInstance -ClassName 'Win32_OperatingSystem'
 
 ForEach ($Module in $PowerShellModules) {
+    Write-Host "Module Name: $Module"
     If ($Module -eq 'FailoverClusters') {
         Switch -Wildcard ($BuildSystem.Caption) {
             '*Windows 10*' {
@@ -55,6 +57,8 @@ ForEach ($Module in $PowerShellModules) {
     else {
         Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber
     }
+
+    Write-Host "Finished install of: $Module"
 
     Import-Module $Module
 }
