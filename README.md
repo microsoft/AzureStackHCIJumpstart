@@ -12,6 +12,12 @@ There are several unique configurations that makes testing the deployment UI in 
 
 For more details on what this does, please see [What it does in a little more depth](#What-it-does-in-a-little-more-depth)
 
+## Installation
+
+Install this module from the PowerShell Gallery using ```Install-Module AzureStackHCIJumpstart```
+
+or for disconnected systems: ```Save-Module -Name AzureStackHCIJumpstart -Path c:\somefolderpath```
+
 ## What's New - Version 2020.1.1.3
 
 Minor update to allow you to specify the BaseVHDX or ServerISO property at runtime (instead of in the config file). E.g. you can set these params in the config file or:
