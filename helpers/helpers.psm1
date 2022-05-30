@@ -300,7 +300,13 @@ Function Initialize-BaseDisk {
             [pscredential] $domainCred
         )
 
-        Import-DscResource -ModuleName xActiveDirectory, DnsServerDsc, NetworkingDSC, xDHCPServer, PSDesiredStateConfiguration
+        # These must remain on separate lines per https://github.com/PowerShell/PSDscResources/issues/81
+        # Error message received was "Exception calling "ImportClassResourcesFromModule" with "3" argument(s): "Resource name 'DnsRecordCname' is already being used by another Resource or Configuration.""
+        Import-DscResource -ModuleName PSDesiredStateConfiguration
+        Import-DscResource -ModuleName xActiveDirectory
+        Import-DscResource -ModuleName xDNSServer
+        Import-DscResource -ModuleName NetworkingDSC
+        Import-DscResource -ModuleName xDHCPServer
 
         $safemodeAdministratorCred = $domainCred
         $NewADUserCred = $domainCred
@@ -418,10 +424,9 @@ Function Initialize-BaseDisk {
 
             xDhcpServerAuthorization LocalServerActivation {
                 Ensure = 'Present'
-                IsSingleInstance = $true
+                IsSingleInstance = 'Yes'
             }
 
-            #Replace
             xDnsServerADZone addReverseADZone {
                 Name = $ReverseDNSrecord
                 DynamicUpdate = "Secure"
@@ -474,7 +479,6 @@ Function Initialize-BaseDisk {
     #create DSC MOF files
     Write-Host "`t Creating Domain Controller configuration"
     LCMConfig   -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -InformationAction SilentlyContinue | Out-Null
-
     DCHydration -OutputPath "$VMPath\buildData\config" -ConfigurationData $ConfigData -domainCred $localCred -InformationAction SilentlyContinue | Out-Null
 
     If (-not (test-path "$VMPath\buildData\config\localhost.meta.mof")) { Write-Error 'Domain Controller LCM MOF creation failed' }

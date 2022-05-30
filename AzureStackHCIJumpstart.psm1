@@ -891,8 +891,8 @@ Function Initialize-AzureStackHCILabOrchestration {
         $BuildDataExists, $RebootIsNeeded = Invoke-Command -VMName $DC.Name -Credential $localCred -ScriptBlock {
             $thisDC = $using:DC
 
-            $metaConfig = Test-Path "$VMPath\buildData\config\localhost.mof" -ErrorAction SilentlyContinue
-            $DCConfig   = Test-Path "$VMPath\buildData\config\localhost.meta.mof" -ErrorAction SilentlyContinue
+            $metaConfig = Test-Path "$using:VMPath\buildData\config\localhost.meta.mof" -ErrorAction SilentlyContinue
+            $DCConfig   = Test-Path "$using:VMPath\buildData\config\localhost.mof" -ErrorAction SilentlyContinue
             $BuildDataExists = $metaConfig -and $DCConfig
 
             do {
@@ -915,6 +915,8 @@ Function Initialize-AzureStackHCILabOrchestration {
         [Console]::WriteLine("`t Reboot is needed: $RebootIsNeeded")
         [Console]::WriteLine("`t BuildDataExists: $BuildDataExists")
         if ($RebootIsNeeded) { Reset-AzStackVMs -VMs $DC -Restart -Wait }
+
+        if ($BuildDataExists -eq $false -or $RebootIsNeeded -eq $true) { Start-Sleep -Seconds 10 }
     } Until (($BuildDataExists -eq $true) -and ($RebootIsNeeded -eq $false))
 
     Remove-Variable RebootIsNeeded
