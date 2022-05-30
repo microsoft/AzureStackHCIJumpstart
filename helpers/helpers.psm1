@@ -300,7 +300,7 @@ Function Initialize-BaseDisk {
             [pscredential] $domainCred
         )
 
-        Import-DscResource -ModuleName xActiveDirectory, xDNSServer, NetworkingDSC, xDHCPServer, PSDesiredStateConfiguration
+        Import-DscResource -ModuleName xActiveDirectory, DnsServerDsc, NetworkingDSC, xDHCPServer, PSDesiredStateConfiguration
 
         $safemodeAdministratorCred = $domainCred
         $NewADUserCred = $domainCred
@@ -385,30 +385,54 @@ Function Initialize-BaseDisk {
                 DependsOn = '[Service]DHCPServer'
             }
 
-            xDhcpServerOption MgmtScopeRouterOption {
-                Ensure    = 'Present'
-                ScopeID   = ($DHCPscope + '0')
-                DnsDomain = $Node.DomainName
-
-                DnsServerIPAddress = ($DHCPscope + '10')
-                AddressFamily      = 'IPv4'
-
-                Router    = ($DHCPscope + '1')
+            DhcpServerOptionValue 'DefaultGW' {
+                OptionId      = 3
+                Value         = ($DHCPscope + '1')
+                VendorClass   = ''
+                UserClass     = ''
+                AddressFamily = 'IPv4'
+                Ensure        = 'Present'
                 DependsOn = '[Service]DHCPServer'
             }
 
-            xDhcpServerAuthorization LocalServerActivation { Ensure = 'Present' }
+            DhcpScopeOptionValue 'DNSServers' {
+                OptionId = 6
+                Value = ($DHCPscope + '10')
+                ScopeId =   ($DHCPscope + '0')
+                VendorClass = ''
+                UserClass   = ''
+                AddressFamily = 'IPv4'
+                DependsOn = '[Service]DHCPServer'
+            }
 
+            # Setting scope DNS domain name
+            DhcpScopeOptionValue DNSDomainName {
+                OptionId = 15
+                Value = $Node.DomainName
+                ScopeId =   ($DHCPscope + '0')
+                VendorClass = ''
+                UserClass   = ''
+                AddressFamily = 'IPv4'
+                DependsOn = '[Service]DHCPServer'
+            }
+
+            xDhcpServerAuthorization LocalServerActivation {
+                Ensure = 'Present'
+                IsSingleInstance = $true
+            }
+
+            #Replace
             xDnsServerADZone addReverseADZone {
                 Name = $ReverseDNSrecord
                 DynamicUpdate = "Secure"
                 ReplicationScope = "Forest"
                 Ensure = "Present"
-                DependsOn = "[xDhcpServerOption]MgmtScopeRouterOption"
+                DependsOn = "[DhcpServerOptionValue]DefaultGW"
             }
 
             $localDNSServers = (Get-NetIPConfiguration | Where-Object IPv4DefaultGateway -ne $Null | Select-Object -First 1).DNSServer.ServerAddresses
 
+            #Replace
             xDnsServerForwarder "forwarder_" {
                 IsSingleInstance = 'Yes'
                 IPAddresses = $localDNSServers
@@ -498,6 +522,7 @@ Function Add-LabVirtualMachines {
             Set-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -IgnoreIdMismatch -ErrorAction SilentlyContinue
         }
 
+        Set-VMSecurity  -VMName "$($LabConfig.Prefix)$($_.VMName)" -VirtualizationBasedSecurityOptOut $true
         Set-VMProcessor -VMName "$($LabConfig.Prefix)$($_.VMName)" -Count 4 -ExposeVirtualizationExtensions $true
         Set-VMMemory    -VMName "$($LabConfig.Prefix)$($_.VMName)" -DynamicMemoryEnabled $true
         Set-VMFirmware  -VMName "$($LabConfig.Prefix)$($_.VMName)" -EnableSecureBoot Off

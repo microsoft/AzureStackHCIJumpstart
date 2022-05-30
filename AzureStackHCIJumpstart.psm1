@@ -1,11 +1,11 @@
 Function Get-AzureStackHCILabConfig {
     # This is the path where VMs will be created for the lab e.g. c:\DataStore\VMs (then \VM01 folder will be added below it)
-    $global:VMPath = 'C:\DataStore\VMs'
+    $global:VMPath = 'C:\ClusterStorage\Volume01'
     New-Item -Path $VMPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
 
     $LabConfig = @{
         # Will be appended to every VM
-        Prefix     = 'AzStackHCI'
+        Prefix     = 'ASZHCI'
 
         # Lab domain admin
         DomainAdminName   = 'Bruce'
@@ -18,14 +18,14 @@ Function Get-AzureStackHCILabConfig {
         #ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
         # This is the filepath to the BaseDisk that will be used to deploy the lab VMs
-        BaseVHDX    = 'C:\DataStore\CustomVHD\RS_PRERELEASE_19531.1000.191204-1324_server_en-us_vl_Full.vhdx'
+        BaseVHDX    = 'C:\DataStore\base\20348.30137.amd64fre.fe_release_svc_staging.220526-1750_server_serverAzureStackHCICor_en-us.vhdx'
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
         #Note: Only /24 is supported right now.
         DHCPscope     = '10.0.0.0'
 
-        SwitchName = 'SiteA'
+        SwitchName = 'ASZHCI'
         VMs = @()
     }
 
@@ -46,10 +46,8 @@ Function Get-AzureStackHCILabConfig {
                 #Note: Where/when needed, these will include a unique number to distinguish
                 @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
                 @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
-                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
-                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
-                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
-                @{ InterfaceDescription = 'QLogic FastLinQ QL41262'}
+                @{ InterfaceDescription = 'Mellanox Connect-X CX6'}
+                @{ InterfaceDescription = 'Mellanox Connect-X CX6'}
             )
         }
     }
@@ -60,6 +58,7 @@ Function Get-AzureStackHCILabConfig {
         MemoryStartupBytes = 4GB
 
         # Accept folders of MSI's or a specific MSI
+<#
         MSIInstaller = @(
             @{ Path = 'c:\datastore\folderA' } ,
             @{ Path = 'c:\datastore\MSIFile1.msi' }
@@ -76,7 +75,7 @@ Function Get-AzureStackHCILabConfig {
                 remote = 'c:\xyz\abc.txt'
             }
         )
-
+#>
         #TODO: Add flag to specify the path to the W10 media if not to use Server
         # This should always be WAC
         Role = 'WAC'
@@ -84,7 +83,7 @@ Function Get-AzureStackHCILabConfig {
 
     $LABConfig.VMs += @{
         VMName        = 'DC01'
-        MemoryStartupBytes = 2GB
+        MemoryStartupBytes = 4GB
 
         # This should always be Domain Controller - Do not change
         Role          = 'Domain Controller'
@@ -870,7 +869,6 @@ Function Initialize-AzureStackHCILabOrchestration {
     Reset-AzStackVMs -Start -VMs $DC
     Wait-ForHeartbeatState -State On -VMs $DC -IgnoreLoopCount #Note: Added for slow systems to give more time to startup
 
-
     $timer = Get-Date
     "Completed Domain Controller VM initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
@@ -893,8 +891,8 @@ Function Initialize-AzureStackHCILabOrchestration {
         $BuildDataExists, $RebootIsNeeded = Invoke-Command -VMName $DC.Name -Credential $localCred -ScriptBlock {
             $thisDC = $using:DC
 
-            $metaConfig = Test-Path C:\DataStore\VMs\buildData\config\localhost.mof -ErrorAction SilentlyContinue
-            $DCConfig   = Test-Path C:\DataStore\VMs\buildData\config\localhost.meta.mof -ErrorAction SilentlyContinue
+            $metaConfig = Test-Path "$VMPath\buildData\config\localhost.mof" -ErrorAction SilentlyContinue
+            $DCConfig   = Test-Path "$VMPath\buildData\config\localhost.meta.mof" -ErrorAction SilentlyContinue
             $BuildDataExists = $metaConfig -and $DCConfig
 
             do {
@@ -915,6 +913,7 @@ Function Initialize-AzureStackHCILabOrchestration {
         }
 
         [Console]::WriteLine("`t Reboot is needed: $RebootIsNeeded")
+        [Console]::WriteLine("`t BuildDataExists: $BuildDataExists")
         if ($RebootIsNeeded) { Reset-AzStackVMs -VMs $DC -Restart -Wait }
     } Until (($BuildDataExists -eq $true) -and ($RebootIsNeeded -eq $false))
 

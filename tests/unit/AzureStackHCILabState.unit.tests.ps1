@@ -10,7 +10,7 @@ Describe 'Validation' -Tags Host {
         ### Verify the Host is sufficient version
         #TODO: Can this run on windows 10? - Not without WindowsFeature checking
         It "${env:ComputerName} must be Windows Server 2016, or Server 2019" {
-            $NodeOS.Caption | Should be ($NodeOS.Caption -like '*Windows Server 2016*' -or $NodeOS.Caption -like '*Windows Server 2019*' -or $NodeOS.Caption -like '*Windows 10*')
+            $NodeOS.Caption | Should be ($NodeOS.Caption -like '*Windows Server 2016*' -or $NodeOS.Caption -like '*Windows Server 2019*' -or $NodeOS.Caption -like '*Windows 10*' -or $NodeOS.Caption -like '*Azure Stack HCI*')
         }
 
         It "${env:ComputerName} should have enough memory to cover what's specified in LabConfig" {
