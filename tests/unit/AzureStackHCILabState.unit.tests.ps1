@@ -89,6 +89,15 @@ Describe 'Validation' -Tags Host {
         It "(Get-AzureStackHCILabConfig) Should have at least two machines with role 'AzureStackHCI'" {
             ($LabConfig.VMs.Where{$_.Role -eq 'AzureStackHCI'}).Count | Should BeGreaterOrEqual 2
         }
+
+        It "(Get-AzureStackHCILabConfig) DHCP Scope should not already be in use on this system" {
+            $DHCPScopePrefix = $LabConfig.DHCPScope | foreach-Object { ([ipaddress]$_).GetAddressBytes()[0..2] -join '.' }
+            $InUseAddress = (Get-NetIPAddress | Where IPAddress -like $DHCPScopePrefix*).IPAddress
+
+            if ($InUseAddress) {
+                $false | Should be $true
+            }
+        }
     }
 }
 
