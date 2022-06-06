@@ -1185,11 +1185,6 @@ Function Initialize-AzureStackHCILabOrchestration {
 }
 
 <#TODO: Cleanup todos!
-- Test that labconfig is available and not malformed
-- Only remove NICs if list is different than config file?
-
-- Once Complete, test that VMs have correct names
-
 - Enable MAC Spoofing on the HV Ethernet vmNICs
 - Enable enhanced session mode on HV VMhosts
 #>
