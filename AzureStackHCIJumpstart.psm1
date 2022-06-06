@@ -5,20 +5,22 @@ Function Get-AzureStackHCILabConfig {
 
     $LabConfig = @{
         # Will be appended to every VM
-        Prefix     = 'ASZHCI'
+        Prefix     = 'AS'
 
-        # Lab domain admin
+        # Username will not be generated due to an issue with xActiveDirectory
         DomainAdminName   = 'Bruce'
         AdminPassword     = 'd@rkKnight!'
 
         # The FQDN of the lab domain to be created
         DomainName        = 'gotham.city'
 
+        # DO NOT USE - Has not been updated for multiple server ISOs required with HCI OS and WS OS for DC/WAC
         # This is the filepath to the ISO that will be used to deploy the lab VMs
         #ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
         # This is the filepath to the BaseDisk that will be used to deploy the lab VMs
-        BaseVHDX    = 'C:\DataStore\base\20348.30137.amd64fre.fe_release_svc_staging.220526-1750_server_serverAzureStackHCICor_en-us.vhdx'
+        BaseVHDX_HCI = 'C:\DataStore\base\20348.30137.amd64fre.fe_release_svc_staging.220526-1750_server_serverAzureStackHCICor_en-us.vhdx'
+        BaseVHDX_WS  = 'C:\DataStore\base\20348.30137.amd64fre.fe_release_svc_staging.220526-1750_server_serverdatacenter_en-us_vl.vhdx'
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
@@ -735,18 +737,6 @@ Function Initialize-AzureStackHCILabOrchestration {
 
         For more information, please see: gitHub.com/Microsoft/AzureStackHCIJumpstart
 
-    .PARAMETER BaseVHDX
-        This is the filepath to the BaseVHDX that will be used to deploy the lab VMs
-
-        You must specify either the BaseVHDX or the ServerISO property either at runtime using these
-        parameters or manually in the Get-AzureStackHCILabConfig directly
-
-    .PARAMETER ServerISO
-        This is the filepath to the ISO that will be used to deploy the lab VMs
-
-        You must specify either the BaseVHDX or the ServerISO property either at runtime using these
-        parameters or manually in the Get-AzureStackHCILabConfig directly
-
     .EXAMPLE
         For examples, please see: gitHub.com/Microsoft/AzureStackHCIJumpstart
 
@@ -758,17 +748,6 @@ Function Initialize-AzureStackHCILabOrchestration {
         More projects : https://aka.ms/HCI-Deployment
         Email Address : HCI-Deployment@Microsoft.com
 #>
-
-    [cmdletbinding(DefaultParameterSetName = 'BaseVHDX')]
-
-    Param (
-        [Parameter(ParameterSetName = 'BaseVHDX')]
-        [string] $BaseVHDX,
-
-        [Parameter(ParameterSetName = 'ServerISO')]
-        [string] $ServerISO
-    )
-
     Clear-Host
 
     $global:here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
@@ -817,37 +796,33 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     $global:LabConfig = Get-AzureStackHCILabConfig
 
-    # Make sure that if BaseVHDX or ServerISO was specified at the prompt that we use that version.
-    # Otherwise, use the version in the Config (Get-AzureStackHCILabConfig)
-    if ($PSBoundParameters.ContainsKey('BaseVHDX')) {
-        $LabConfig.Remove('BaseVHDX')
-        $LabConfig.BaseVHDX += $BaseVHDX
-    }
-    ElseIf ($PSBoundParameters.ContainsKey('ServerISO')) {
-        $LabConfig.Remove('ServerISO')
-        $LabConfig.ServerISO += $ServerISO
-    }
-
     #TODO: If VMs already exist, return them to stage0 snapshot and delete the snapshots before continuing
 
     $timer = Get-Date
     "Beginning Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
+
     # Check that the host is ready with approve host state
     Approve-AzureStackHCILabState -Test Host
 
     $timer = Get-Date
     "Completed Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 #region BaseDisk and VM Create
+
+<#
     # Hydrate base disk - this is long and painful...
+    # Note: This does not currently work for additional BaseDisks added to specific VMs
+    # Since Azure Stack HCI removed AD and the UI, you now need two base disks
     if ($LabConfig.ServerISO) {
         New-BaseDisk
 
         $timer = Get-Date
         "Completed base disk creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
     }
+#>
 
     # Update BaseDisk with buildData
-    Initialize-BaseDisk
+    if ('AzureStackHCI'     -in $LabConfig.VMs.Role) { Initialize-HCIBaseDisk }
+    if ('Domain Controller' -in $LabConfig.VMs.Role -or 'WAC' -in $LabConfig.VMs.Role) { Initialize-WSBaseDisk }
 
     $timer = Get-Date
     "Completed base disk initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
@@ -926,7 +901,6 @@ Function Initialize-AzureStackHCILabOrchestration {
 #endregion
 
 #region Domain Creation and VM online customization
-
     $timer = Get-Date
     "Initializing domain creation: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
     # This runs asynchronously as nothing depends on this being complete at this point
@@ -954,13 +928,13 @@ Function Initialize-AzureStackHCILabOrchestration {
 
         # If there are only 2 VMs left to start, just keep going...no more delays, get on with it.
         If (($VMCounter - 2) -le $AllVMs.Count) {
-            $thisVMOSDLength = 4MB
+            $thisVMOSDLength = 4MB # Initializing - Do not remove
 
             $VHDXExtension = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Extension
             if ($VHDXExtension -ne '.avhdx') {
-                While ($thisVMOSDLength -le 600MB) {
+                While ($thisVMOSDLength -le 350MB) {
                     $thisVMOSDLength = (Get-ChildItem -Path ($thisVM | Get-VMHardDiskDrive -ControllerLocation 0 -ControllerNumber 0).Path).Length
-                    Start-Sleep -Seconds 5
+                    Start-Sleep -Seconds 3
                 }
             }
         }
@@ -980,16 +954,14 @@ Function Initialize-AzureStackHCILabOrchestration {
             $ParentPath   = Split-Path -Path $VHDXToConvert.Path -Parent
             $BaseDiskPath = (Get-VHD -Path $VHDXToConvert.Path).ParentPath
 
-            if ($BaseDiskPath -eq $using:VHDPath) {
-                [Console]::WriteLine("Copying VHDX base disk for reparenting on $($thisJobVM.Name)")
+            [Console]::WriteLine("Copying VHDX base disk for reparenting on $($thisJobVM.Name)")
 
-                $BaseLeaf = Split-Path $BaseDiskPath -Leaf
-                $NewBasePath = Join-Path -Path $ParentPath -ChildPath $BaseLeaf
-                Copy-Item -Path $BaseDiskPath -Destination $NewBasePath -InformationAction SilentlyContinue
+            $BaseLeaf = Split-Path $BaseDiskPath -Leaf
+            $NewBasePath = Join-Path -Path $ParentPath -ChildPath $BaseLeaf
+            Copy-Item -Path $BaseDiskPath -Destination $NewBasePath -InformationAction SilentlyContinue
 
-                [Console]::WriteLine("`t Reparenting $($thisJobVM.Name) OSD to $NewBasePath")
-                $VHDXToConvert | Set-VHD -ParentPath $NewBasePath -IgnoreIdMismatch
-            }
+            [Console]::WriteLine("`t Reparenting $($thisJobVM.Name) OSD to $NewBasePath")
+            $VHDXToConvert | Set-VHD -ParentPath $NewBasePath -IgnoreIdMismatch
         } -OutVariable +RSJob | Out-Null
     }
 
@@ -1053,6 +1025,13 @@ Function Initialize-AzureStackHCILabOrchestration {
     }
 
     Wait-ForAzureStackHCIDomain
+
+    # Create environment Domain Admin
+    Invoke-Command -VMName $DC.Name -Credential $localCred -ScriptBlock {
+        $thisPass = ConvertTo-SecureString $($using:LabConfig.AdminPassword) -AsPlainText -Force
+        New-ADUser -Name $($using:LabConfig.DomainAdminName) -Accountpassword $thisPass -Enabled $true -PasswordNeverExpires $true
+        Add-ADGroupMember -Identity 'Domain Admins' -Members $($using:LabConfig.DomainAdminName)
+    }
 
     $LabConfig.VMs.Where{ $_.Role -eq 'Domain Controller' } | Foreach-Object {
         $thisSystem = "$($LabConfig.Prefix)$($_.VMName)"
@@ -1120,7 +1099,7 @@ Function Initialize-AzureStackHCILabOrchestration {
 
                 # Join computer to domain - Proper name must already be set
                 $thisDomain = $($using:LabConfig.DomainNetbiosName)
-                Add-Computer -DomainName $thisDomain -LocalCredential $Using:localCred -Credential $Using:VMCred -Force -WarningAction SilentlyContinue
+                Add-Computer -DomainName $thisDomain -LocalCredential $Using:localCred -Credential $using:VMCred -Force -WarningAction SilentlyContinue
             }
         }
     }
@@ -1141,12 +1120,14 @@ Function Initialize-AzureStackHCILabOrchestration {
     Wait-RSJob   $RSJob | Out-Null
     Remove-RSJob $RSJob | Out-Null
 
-    # Begin Merge
+    # Prep for Merge
     $AllVMs | ForEach-Object {
         $thisVM = $_
-        $BaseDiskACL = Get-ACL $VHDPath
 
-        $OSDDisk      = Get-VHD "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue
+        if ($thisVM.Name -in $AzureStackHCIVMs.Name) { $BaseDiskACL = Get-ACL $HCIVHDPath }
+        else { $BaseDiskACL = Get-ACL $WSVHDPath }
+
+        $OSDDisk = Get-VHD "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue
 
         If ($OSDDisk) {
             #TODO: Readd disk at the beginning of the initialize in case this is restarted after remove vmharddisk occurs. Look for either OSD or merged disk
@@ -1155,37 +1136,38 @@ Function Initialize-AzureStackHCILabOrchestration {
 
             Set-ACL  -Path $BaseDiskPath -AclObject $BaseDiskACL
             Set-ItemProperty -Path $BaseDiskPath -Name IsReadOnly -Value $false
-
-            #TODO: This is not working for all systems. AzStackHCI04 does not merge (all others do).
-            #[Console]::WriteLine("`t Beginning VHDX Merge for $($thisVM.Name)")
-            #Start-RSJob -Name "$($thisVM.Name)-BaseDiskMerge" -ScriptBlock {
-            #    $OSDDiskPath = $Using:OSDDisk
-            #    Merge-VHD -Path $($OSDDisk.Path) -DestinationPath $($using:BaseDiskPath)
-            #} -OutVariable +RSJob | Out-Null
         }
-        Else { [Console]::WriteLine("`t $($thisVM.Name) VHDX has already been merged - backslash ignore") }
+
+        Remove-Variable BaseDiskACL -ErrorAction SilentlyContinue
     }
 
+    # Begin Merge
     $AllVMs | ForEach-Object {
         $thisVM = $_
+        $OSDDisk = Get-VHD "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue
 
-        $OSDDisk      = Get-VHD "$($thisVM.Path)\Virtual Hard Disks\OSD.VHDX" -ErrorAction SilentlyContinue
         If ($OSDDisk) {
+            [Console]::WriteLine("`t Beginning VHDX Merge for $($thisVM.Name)")
             $BaseDiskPath = $OSDDisk.ParentPath
-            Merge-VHD -Path $($OSDDisk.Path) -DestinationPath $($BaseDiskPath)
+            Merge-VHD -Path $OSDDisk.Path -DestinationPath $BaseDiskPath -Force
         }
         Else { [Console]::WriteLine("`t $($thisVM.Name) VHDX has already been merged - backslash ignore") }
     }
 
-    #Wait-RSJob   $RSJob | Out-Null
-    #Remove-RSJob $RSJob | Out-Null
-
     $AllVMs | ForEach-Object {
         $thisVM = $_
 
-        $MergedBaseDisk = "$($thisVM.Path)\Virtual Hard Disks\$($VHDPath.Split('\') | Select-Object -Last 1)"
+        if ($thisVM.Name -in $AzureStackHCIVMs.Name) {
+            $MergedBaseDisk = "$($thisVM.Path)\Virtual Hard Disks\$($HCIVHDPath.Split('\') | Select-Object -Last 1)"
+        }
+        else {
+            $MergedBaseDisk = "$($thisVM.Path)\Virtual Hard Disks\$($WSVHDPath.Split('\') | Select-Object -Last 1)"
+        }
+
         $OSD = Add-VMHardDiskDrive -VM $thisVM -Path $MergedBaseDisk -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Passthru -ErrorAction SilentlyContinue
         Set-VMFirmware  -VMName $thisVM.Name -BootOrder $OSD
+
+        Remove-Variable MergedBaseDisk -ErrorAction SilentlyContinue
     }
 #endregion
 

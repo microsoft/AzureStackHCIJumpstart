@@ -30,7 +30,6 @@ Function Approve-AzureStackHCILabState {
 }
 
 #region reboot and VM management
-    #TODO: Update with rsJob
 function Wait-ForHeartbeatState {
     param (
         [Parameter(Mandatory=$true)]
@@ -119,7 +118,7 @@ Function Reset-AzStackVMs {
     }
 
     If ($Shutdown) {
-        $VMs | ForEach-Object { Stop-VM -VMName $_.Name -Force -WarningAction SilentlyContinue  }
+        $VMs | ForEach-Object { Stop-VM -VMName $_.Name -Force -ErrorAction SilentlyContinue -WarningAction SilentlyContinue  }
         If ($Wait) { Wait-ForHeartbeatState -State Off -VMs $VMs }
     }
 
@@ -171,7 +170,7 @@ Function New-UnattendFileForVHD {
 
     if ( Test-Path "$Path\Unattend.xml" ) { Remove-Item "$Path\Unattend.xml" -InformationAction SilentlyContinue }
 
-    New-Item "$Path\Unattend.xml" -ItemType File -Force -OutVariable unattendFile | Out-Null
+    $unattendFile = New-Item "$Path\Unattend.xml" -ItemType File -Force
     $fileContent =  @"
     <?xml version="1.0" encoding="utf-8"?>
     <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -213,36 +212,95 @@ Function New-UnattendFileForVHD {
 }
 
 #Customize Base Disk
-Function Initialize-BaseDisk {
+Function Initialize-HCIBaseDisk {
     # Create Unattend File; remove old unattend
     $TimeZone  = (Get-TimeZone).id
     Remove-Item -Path "$VMPath\buildData\Unattend.xml" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$VMPath\buildData\HCIBaseDisk_unattend.xml" -Force -ErrorAction SilentlyContinue
     New-UnattendFileForVHD -TimeZone $TimeZone -AdminPassword $LabConfig.AdminPassword -Path "$VMPath\buildData"
 
     #Apply Unattend to VM
-    Write-Host "`t Applying Unattend and copying DSC Modules"
+    Write-Host "`t Applying Unattend for HCI Base Disk"
     $unattendfile = "$VMPath\buildData\Unattend.xml"
 
-    # If using ServerISO, this is set Function:\New-BaseDisk. If using BaseVHDX, this needs to be set
-    If ($LabConfig.BaseVHDX) { $global:VHDPath = $LabConfig.BaseVHDX }
+    If ($LabConfig.BaseVHDX_HCI) { $global:HCIVHDPath = $LabConfig.BaseVHDX_HCI }
 
-    If ( Test-Path $VHDPath ) {
-        Dismount-DiskImage -ImagePath $VHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
-        $MountedDisk = Mount-DiskImage -ImagePath $VHDPath -StorageType VHDX -ErrorAction SilentlyContinue
+    If ( Test-Path $HCIVHDPath ) {
+        Dismount-DiskImage -ImagePath $HCIVHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+        $MountedDisk = Mount-DiskImage -ImagePath $HCIVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
 
         If ( $MountedDisk ) {
-            $DriveLetter = $(Get-DiskImage -ImagePath $VHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
+            $DriveLetter = $(Get-DiskImage -ImagePath $HCIVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
             $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter -ErrorAction SilentlyContinue).sizeMax
 
             #TODO: Make sure not the same size as the drives included in LabConfig
             Switch ($MaxSize) {
                 {$_ -lt 100GB} {
-                    Dismount-DiskImage -ImagePath $VHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
-                    Resize-VHD -Path $VHDPath -SizeBytes (100GB)
+                    Dismount-DiskImage -ImagePath $HCIVHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+                    Resize-VHD -Path $HCIVHDPath -SizeBytes (100GB)
 
                     #Note: Redo all this stuff in case the drive letters changed
-                    $MountedDisk = Mount-DiskImage -ImagePath $VHDPath -StorageType VHDX -ErrorAction SilentlyContinue
-                    $DriveLetter = $(Get-DiskImage -ImagePath $VHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
+                    $MountedDisk = Mount-DiskImage -ImagePath $HCIVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
+                    $DriveLetter = $(Get-DiskImage -ImagePath $HCIVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
+
+                    Resize-Partition -DriveLetter $DriveLetter -Size $MaxSize -ErrorAction SilentlyContinue
+                }
+            }
+
+            Remove-Variable MaxSize -ErrorAction SilentlyContinue
+            $MountPath = "$($DriveLetter):" -replace ' '
+
+            If ( Test-Path "$MountPath\Windows\Panther\unattend.xml" ) { Write-Host "`t Unattend file exists..." }
+            Else {
+                Write-Host "`t Unattend file does not exist...Updating..."
+
+                New-Item -Path "$MountPath\Windows\Panther" -ItemType Directory -Force | Out-Null
+                Use-WindowsUnattend -Path $MountPath -UnattendPath $unattendfile -InformationAction SilentlyContinue
+
+                Copy-Item -Path $unattendfile -Destination "$MountPath\Windows\Panther\unattend.xml" -Force
+            }
+        }
+        Else { Write-Host "`t $HCIVHDPath could not be mounted but was found (likely in use)" }
+    }
+    Else { Write-Error "$HCIVHDPath was not found - Can't hydrate the basedisk" -ErrorAction Stop }
+
+    Dismount-DiskImage -ImagePath $HCIVHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+    Set-ItemProperty -Path $HCIVHDPath -Name IsReadOnly -Value $true
+
+    Rename-Item -Path $unattendfile -NewName "$VMPath\buildData\HCIBaseDisk_unattend.xml"
+}
+
+Function Initialize-WSBaseDisk {
+    # Create Unattend File; remove old unattend
+    $TimeZone  = (Get-TimeZone).id
+    Remove-Item -Path "$VMPath\buildData\Unattend.xml" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$VMPath\buildData\WSBaseDisk_unattend.xml" -Force -ErrorAction SilentlyContinue
+    New-UnattendFileForVHD -TimeZone $TimeZone -AdminPassword $LabConfig.AdminPassword -Path "$VMPath\buildData"
+
+    #Apply Unattend to VM
+    Write-Host "`t Applying Unattend and copying DSC Modules for WS Base Disk"
+    $unattendfile = "$VMPath\buildData\Unattend.xml"
+
+    # If using ServerISO, this is set Function:\New-BaseDisk. If using BaseVHDX, this needs to be set
+    If ($LabConfig.BaseVHDX_WS) { $global:WSVHDPath = $LabConfig.BaseVHDX_WS }
+
+    If ( Test-Path $WSVHDPath ) {
+        Dismount-DiskImage -ImagePath $WSVHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+        $MountedDisk = Mount-DiskImage -ImagePath $WSVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
+
+        If ( $MountedDisk ) {
+            $DriveLetter = $(Get-DiskImage -ImagePath $WSVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
+            $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter -ErrorAction SilentlyContinue).sizeMax
+
+            #TODO: Make sure not the same size as the drives included in LabConfig
+            Switch ($MaxSize) {
+                {$_ -lt 100GB} {
+                    Dismount-DiskImage -ImagePath $WSVHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+                    Resize-VHD -Path $WSVHDPath -SizeBytes (100GB)
+
+                    #Note: Redo all this stuff in case the drive letters changed
+                    $MountedDisk = Mount-DiskImage -ImagePath $WSVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
+                    $DriveLetter = $(Get-DiskImage -ImagePath $WSVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
 
                     Resize-Partition -DriveLetter $DriveLetter -Size $MaxSize -ErrorAction SilentlyContinue
                 }
@@ -275,12 +333,12 @@ Function Initialize-BaseDisk {
                 Copy-Item -Path $unattendfile -Destination "$MountPath\Windows\Panther\unattend.xml" -Force
             }
         }
-        Else { Write-Host "`t $VHDPath could not be mounted but was found (likely in use)" }
+        Else { Write-Host "`t $WSVHDPath could not be mounted but was found (likely in use)" }
     }
-    Else { Write-Error "$VHDPath was not found - Can't hydrate the basedisk" -ErrorAction Stop }
+    Else { Write-Error "$WSVHDPath was not found - Can't hydrate the basedisk" -ErrorAction Stop }
 
-    Dismount-DiskImage -ImagePath $VHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
-    Set-ItemProperty -Path $VHDPath -Name IsReadOnly -Value $true
+    Dismount-DiskImage -ImagePath $WSVHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+    Set-ItemProperty -Path $WSVHDPath -Name IsReadOnly -Value $true
 
     # Stuff needed for DCHydration
     $DN = @()
@@ -333,23 +391,6 @@ Function Initialize-BaseDisk {
                 SafemodeAdministratorPassword = $safemodeAdministratorCred
                 DomainNetbiosName = $LabConfig.DomainNetbiosName
                 DependsOn = '[WindowsFeature]ADDSInstall'
-            }
-
-            xADUser Domain_Admin {
-                DomainAdministratorCredential = $domainCred
-                Ensure      = 'Present'
-                DomainName  = $LabConfig.DomainName
-                UserName    = $LabConfig.DomainAdminName
-                Password    = $NewADUserCred
-                Description = 'DomainAdmin'
-                PasswordNeverExpires = $true
-                DependsOn = '[xADDomain]FirstDS'
-            }
-
-            xADGroup DomainAdmins {
-                GroupName = 'Domain Admins'
-                MembersToInclude = $LabConfig.DomainAdminName
-                DependsOn = '[xADUser]Domain_Admin'
             }
 
             xADUser AdministratorNeverExpires {
@@ -514,16 +555,30 @@ Function Add-LabVirtualMachines {
     }
 
     $LabConfig.VMs | ForEach-Object {
+        $thisVM = $_
         $VM = Get-VM -VMName "$($LabConfig.Prefix)$($_.VMName)" -ErrorAction SilentlyContinue
 
         If ($VM) { Write-Host "`t VM named $($LabConfig.Prefix)$($_.VMName) already exists" }
         else {
             Write-Host "`t Creating VM: $($LabConfig.Prefix)$($_.VMName)"
             $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes $_.MemoryStartupBytes -Path $vmpath -SwitchName "$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -Generation 2
-            New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -Differencing | Out-Null
+
+            if ( $thisVM.Role -eq 'AzureStackHCI' ) {
+                New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $HCIVHDPath -Differencing | Out-Null
+            }
+            else {
+                New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $WSVHDPath -Differencing | Out-Null
+            }
+
             $BootDevice = Add-VMHardDiskDrive -VMName "$($LabConfig.Prefix)$($_.VMName)" -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Passthru -ErrorAction SilentlyContinue
             Set-VMFirmware -VMName "$($LabConfig.Prefix)$($_.VMName)" -BootOrder $BootDevice
-            Set-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $VHDPath -IgnoreIdMismatch -ErrorAction SilentlyContinue
+
+            if ( $thisVM.Role -eq 'AzureStackHCI' ) {
+                Set-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $HCIVHDPath -IgnoreIdMismatch -ErrorAction SilentlyContinue
+            }
+            else {
+                Set-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $WSVHDPath -IgnoreIdMismatch -ErrorAction SilentlyContinue
+            }
         }
 
         Set-VMSecurity  -VMName "$($LabConfig.Prefix)$($_.VMName)" -VirtualizationBasedSecurityOptOut $true
@@ -557,8 +612,8 @@ Function Assert-LabDomain {
 
     # Use local cred
     Invoke-Command -VMName $DCName -Credential $localCred -ScriptBlock {
-        Set-DscLocalConfigurationManager -Path "$($using:VMPath)\buildData\config" -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
-        Start-DscConfiguration           -Path "$($using:VMPath)\buildData\config" -Force -InformationAction SilentlyContinue -WarningAction SilentlyContinue
+        Set-DscLocalConfigurationManager -Path "$($using:VMPath)\buildData\config" -Force | Out-Null
+        Start-DscConfiguration           -Path "$($using:VMPath)\buildData\config" -Force | Out-Null
     }
 }
 
@@ -580,7 +635,7 @@ Function Wait-ForAzureStackHCIDomain {
         } -Credential $localCred -ErrorAction SilentlyContinue
 
         if ($DscConfigurationStatus.Status -ne 'Success') {
-            Write-Host "`t Domain Controller Configuration in Progress. Sleeping for 20 seconds."
+            Write-Host "`t Domain Controller Configuration in Progress. Sleeping for 10 seconds."
 
             If ($DSCLocalConfigurationManager.LCMState -eq $null) { Write-Host "`t `t LCM State : Unknown - Machine may be rebooting `n" }
             Else {
@@ -589,7 +644,7 @@ Function Wait-ForAzureStackHCIDomain {
 
                 If ($($DSCLocalConfigurationManager.LCMState) -eq 'PendingConfiguration') { $RebootCounter ++ }
 
-                If ($RebootCounter -eq 3) {
+                If ($RebootCounter -eq 6) {
                     Stop-VM  -VMName $DCName -Force
                     Start-VM -VMName $DCName
 
@@ -597,7 +652,7 @@ Function Wait-ForAzureStackHCIDomain {
                 }
             }
 
-            Start-Sleep 20
+            Start-Sleep 10
         } ElseIf ($DscConfigurationStatus.status -eq "Success" -and $DscConfigurationStatus.Type -ne 'LocalConfigurationManager' ) {
             Write-Host "`t Current Domain state: $($DscConfigurationStatus.status), ResourcesNotInDesiredState: $($DscConfigurationStatus.resourcesNotInDesiredState.count), ResourcesInDesiredState: $($DscConfigurationStatus.resourcesInDesiredState.count)"
         }
@@ -766,13 +821,11 @@ Function New-AzureStackHCIVMAdapters {
 }
 
 Function Set-AzureStackHCIVMAdapters {
-
-    #TODO: Also update this to allow labconfig to specify
     # Rename Adapters inside guest
     $AzureStackHCIVMs | ForEach-Object {
         $thisVM = $_
 
-        Write-Host "`t Renaming NICs in the Guest based on the vmNIC name for easy ID"
+        Write-Host "`t Renaming NICs in $($thisVM.Name) based on the vmNIC name for easy ID"
         Invoke-Command -VMName $thisVM.Name -Credential $VMCred -ScriptBlock {
             #$VerbosePreference = 'continue' - Use for testing
             $RenameVMNic = Get-NetAdapterAdvancedProperty -DisplayName "Hyper-V Net*"

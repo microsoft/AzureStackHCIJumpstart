@@ -60,7 +60,8 @@ Describe 'Validation' -Tags Host {
     }
 
     Context 'Lab Configuration (Get-AzureStackHCILabConfig)' {
-        If ($LabConfig.ContainsKey('ServerISO') -and $LabConfig.ContainsKey('BaseVHDX')) {
+        #TODO: Update
+        <#If ($LabConfig.ContainsKey('ServerISO') -and $LabConfig.ContainsKey('BaseVHDX')) {
             It "${env:ComputerName} LabConfig should not specify both BaseVHDX and ServerISO properties" { $true | Should be $false }
         }
         ElseIf ( (-not($LabConfig.ContainsKey('ServerISO'))) -and (-not($LabConfig.ContainsKey('BaseVHDX'))) ) {
@@ -75,7 +76,7 @@ Describe 'Validation' -Tags Host {
             It "(Get-AzureStackHCILabConfig) The specified VHDX from LabConfig.BaseVHDX must actually exist" {
                 Test-Path $LabConfig.BaseVHDX | Should be $true
             }
-        }
+        }#>
 
         It "(Get-AzureStackHCILabConfig) Should have at least one machine with role 'WAC'" {
             ($LabConfig.VMs.Where{$_.Role -eq 'WAC'}).Count | Should BeGreaterOrEqual 1
