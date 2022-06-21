@@ -19,8 +19,8 @@ Function Get-AzureStackHCILabConfig {
         #ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
         # This is the filepath to the BaseDisk that will be used to deploy the lab VMs
-        BaseVHDX_HCI = 'C:\DataStore\base\20348.30137.amd64fre.fe_release_svc_staging.220526-1750_server_serverAzureStackHCICor_en-us.vhdx'
-        BaseVHDX_WS  = 'C:\DataStore\base\20348.30137.amd64fre.fe_release_svc_staging.220526-1750_server_serverdatacenter_en-us_vl.vhdx'
+        BaseVHDX_HCI = 'C:\DataStore\base\20348.30163.amd64fre.fe_release_svc_staging.220618-1750_server_serverAzureStackHCICor_en-us.vhdx'
+        BaseVHDX_WS  = 'C:\DataStore\base\20348.30163.amd64fre.fe_release_svc_staging.220618-1750_server_serverdatacenter_en-us_vl.vhdx'
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
