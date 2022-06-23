@@ -58,13 +58,11 @@ ForEach ($Module in $PowerShellModules) {
         Write-Output "Installing Pester version 4.9.0"
         Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber -SkipPublisherCheck -RequiredVersion 4.9.0
         Import-Module $Module -RequiredVersion 4.9.0
-        
-        Write-Output "----Existing Pester Modules"
-        Get-Module -Name Pester -ListAvailable
     }
     else {
         Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber
         Import-Module $Module
+        Get-Module $Module
     }
 
     Import-Module $Module
