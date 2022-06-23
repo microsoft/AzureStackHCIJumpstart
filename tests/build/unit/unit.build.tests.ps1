@@ -29,6 +29,7 @@ Describe "$($env:repoName)-Manifest" {
     Context ExportedContent {
         Import-Module .\$($env:repoName).psd1 -Force
 
+        <# Temp remove of outdated params
         It 'Should have the BaseVHDX param' {
             Get-Command Initialize-AzureStackHCILabOrchestration | Should -HaveParameter BaseVHDX -Not -Mandatory
         }
@@ -36,6 +37,7 @@ Describe "$($env:repoName)-Manifest" {
         It 'Should have the ServerISO param' {
             Get-Command Initialize-AzureStackHCILabOrchestration | Should -HaveParameter ServerISO -Not -Mandatory
         }
+        #>
 
         Import-Module .\$($env:repoName).psd1 -Force -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
 
