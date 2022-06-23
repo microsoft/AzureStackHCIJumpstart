@@ -52,11 +52,15 @@ ForEach ($Module in $PowerShellModules) {
         }
     }
     ElseIf ($Module -eq 'Pester') {
-        Write-Output "Existing Pester Installations"
-            Get-Module Pester -ListAvailable
+        Write-Output "Uninstalling Pester version >= 5.0"
+        Get-Module -Name Pester -ListAvailable | ? Version -gt '5.0' | Uninstall-Module
+        
         Write-Output "Installing Pester version 4.9.0"
         Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber -SkipPublisherCheck -RequiredVersion 4.9.0
         Import-Module $Module -RequiredVersion 4.9.0
+        
+        Write-Output "----Existing Pester Modules"
+        Get-Module -Name Pester -ListAvailable
     }
     else {
         Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber
