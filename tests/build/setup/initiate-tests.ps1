@@ -2,6 +2,7 @@
 # Pester               : https://github.com/pester/Pester/wiki
 # Pester Code Coverage : https://info.sapien.com/index.php/scripting/scripting-modules/testing-pester-code-coverage
 
+Import-Module Pester -RequiredVersion '4.9.0'
 New-Item -Path .\tests -Name results -ItemType Directory -Force
 
 $testResultPath = '.\tests\build\results\TestResults.xml'
