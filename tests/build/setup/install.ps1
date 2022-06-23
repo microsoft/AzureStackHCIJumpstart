@@ -6,7 +6,8 @@ Invoke-AppveyorInstallTask
 Remove-Item .\DscResource.Tests\ -Force -Confirm:$false -Recurse
 
 # Add pester here if not included in the RequiredModules portion of the module manifest
-#[string[]]$PowerShellModules = @('posh-git', 'psake', 'poshspec', 'PSScriptAnalyzer')
+[string[]]$PowerShellModules = @('posh-git')
+#, 'psake', 'poshspec', 'PSScriptAnalyzer')
 
 $ModuleManifest = Test-ModuleManifest .\$($env:RepoName).psd1 -ErrorAction SilentlyContinue
 $repoRequiredModules = $ModuleManifest.RequiredModules.Name
