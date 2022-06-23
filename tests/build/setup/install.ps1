@@ -3,6 +3,8 @@ git.exe clone -q https://github.com/PowerShell/DscResource.Tests
 Import-Module -Name "$env:APPVEYOR_BUILD_FOLDER\DscResource.Tests\AppVeyor.psm1"
 Invoke-AppveyorInstallTask
 
+Remove-Item .\DscResource.Tests\ -Force -Confirm:$false -Recurse
+
 # Add pester here if not included in the RequiredModules portion of the module manifest
 [string[]]$PowerShellModules = @('posh-git', 'psake', 'poshspec', 'PSScriptAnalyzer')
 
@@ -50,10 +52,13 @@ ForEach ($Module in $PowerShellModules) {
         }
     }
     ElseIf ($Module -eq 'Pester') {
-        Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber -SkipPublisherCheck
+        Write-Output "Installing Pester version 4.9.0"
+        Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber -SkipPublisherCheck -RequiredVersion 4.9.0
+        Import-Module $Module -RequiredVersion 4.9.0
     }
     else {
         Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber
+        Import-Module $Module
     }
 
     Import-Module $Module
