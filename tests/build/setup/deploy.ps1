@@ -2,8 +2,8 @@ git config --global credential.helper store
 
 Add-Content "$env:USERPROFILE\.git-credentials" "https://$($env:GitHubKey):x-oauth-basic@github.com`n"
 
-git config --global user.email "NetwkBld@Microsoft.com"
-git config --global user.name "CoreNet Build Svc"
+git config --global user.email "dcuomo@outlook.com"
+git config --global user.name "Dan Cuomo"
 git config --global core.autocrlf false
 git config --global core.safecrlf false
 
