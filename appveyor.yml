@@ -12,10 +12,8 @@ clone_folder: c:\projects\AzureStackHCIJumpstart
 
 init:
   - ps: $Env:repoName     = $($env:APPVEYOR_REPO_NAME.Split('/')[1])
-  - ps: $date = Get-Date
-  - ps: Update-AppveyorBuild -Version "$($date.year).$($date.month).$($date.day).$env:appveyor_build_number"
-  - ps: $Env:BuildVersion = "$($date.year).$($date.month).$($date.day).$env:appveyor_build_number"
-
+  - ps: Update-AppveyorBuild -Version "$(Get-Date -format yyyy.MM.dd).$env:appveyor_build_number"
+  - ps: $Env:BuildVersion = "$(Get-Date -format yyyy.MM.dd).$env:appveyor_build_number"
 
 # Install script prior to running tests
 install:
@@ -29,25 +27,22 @@ test_script:
 deploy_script:
   - ps: . .\tests\build\setup\deploy.ps1
 
-version: '{build}'
+version: 0.0.0.{build}
 
 image:
-- Visual Studio 2017
+- Visual Studio 2019
 
 # Environment variables for PowerShell Gallery (NuGetAPIKey) and GitHub (GitHubKey) API key for publishing updates
 #    - The "secure:" value is the Appveyor encryption of the key
 #    - GitHub update occurs to ensure that the module version is incremented based on the build number
 
-#CoreNetBuilder
-#Kz5VZnHxQlD/mHk0dlvpxTN1isiwW9A5fWhRdL7a1vcGwbVHFyj/x9wrIkqpAkcf
-
 environment:
   NuGetApiKey:
-    secure: 6tYZjwLCAKshycZdIxxj0T1af5DbvmqpInHCXijAdX27oP9L6FFuwdnpdpk+271s
+    secure: N4Mt/R/8j1Lk6GPkWqpkBl7ktciiBQfb3s4wzT0rghDQDeGJErjQshcdgazxzE/X
   GitHubKey:
-    secure: qpQkQoAMAquwRIDJtJT9rD8JZTVlNxAfOFqUgrsbCJy6C8AY0jFHMGap18SxmH+F
-  APPVEYOR_RDP_PASSWORD:
-    secure: q9cNMN8o/tkzFDvDf+npkj5MOgFVGOLnJokZq/d4BUY=
+    secure: 4VTkUGIAUqMtDSbrIrbn856kPmOLVYNSSy/NwsnQajL+7o+xpoqWZcTpYfEXco2/
+  #  APPVEYOR_RDP_PASSWORD:
+  #    secure: 7acrwNLLvCuP7Gw0r+rLvPxbtzr8yWmJCgaKndtKjmA=
 
 # Disable automatic builds; Without this, the following error shows up:
 # "Specify a project or solution file. The directory does not contain a project or solution file."
