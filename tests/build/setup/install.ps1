@@ -6,7 +6,7 @@ Invoke-AppveyorInstallTask
 Remove-Item .\DscResource.Tests\ -Force -Confirm:$false -Recurse
 
 # Add pester here if not included in the RequiredModules portion of the module manifest
-[string[]]$PowerShellModules = @('posh-git')
+[string[]]$PowerShellModules = @('Pester', 'posh-git')
 #, 'psake', 'poshspec', 'PSScriptAnalyzer')
 
 $ModuleManifest = Test-ModuleManifest .\$($env:RepoName).psd1 -ErrorAction SilentlyContinue
@@ -14,18 +14,7 @@ $repoRequiredModules = $ModuleManifest.RequiredModules.Name
 
 If ($repoRequiredModules) { $PowerShellModules += $repoRequiredModules }
 
-# This section is taken care of by Invoke-AppVeyorInstallTask
-<#[string[]]$PackageProviders = @('NuGet', 'PowerShellGet')
-
-# Install package providers for PowerShell Modules
-ForEach ($Provider in $PackageProviders) {
-    If (!(Get-PackageProvider $Provider -ErrorAction SilentlyContinue)) {
-        Install-PackageProvider $Provider -Force -ForceBootstrap -Scope CurrentUser
-    }
-}#>
-
 # Feature Installation
-
 $serverFeatureList = @('Hyper-V')
 
 If ($PowerShellModules -contains 'FailoverClusters') {
@@ -55,7 +44,7 @@ ForEach ($Module in $PowerShellModules) {
     ElseIf ($Module -eq 'Pester') {
         Write-Output "Uninstalling Pester version >= 5.0"
         Get-Module -Name Pester -ListAvailable | ? Version -gt '5.0' | Uninstall-Module
-        
+
         Write-Output "Installing Pester version 4.9.0"
         Install-Module $Module -Scope AllUsers -Force -Repository PSGallery -AllowClobber -SkipPublisherCheck -RequiredVersion 4.9.0
         Import-Module $Module -RequiredVersion 4.9.0
