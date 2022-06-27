@@ -802,7 +802,7 @@ Function Initialize-AzureStackHCILabOrchestration {
     "Beginning Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
     # Check that the host is ready with approve host state
-    Approve-AzureStackHCILabState -Test Host
+    Approve-AzureStackHCILabState
 
     $timer = Get-Date
     "Completed Host Approval Time: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append

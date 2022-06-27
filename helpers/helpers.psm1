@@ -1,31 +1,151 @@
 # These functions are not exported and you should not ever have to come here...
 Function Approve-AzureStackHCILabState {
-    param(
-        [Parameter(Mandatory=$True)]
-        [ValidateSet('Host', 'Lab')]
-        [String] $Test
-    )
+    $PASS = '+'
+    $FAIL = '-'
+    $testsFailed = 0
 
-    $here = Split-Path -Parent (Get-Module -Name AzureStackHCIJumpstart).Path
+    Write-Host "Testing Host System ${$env:ComputerName}" -ForegroundColor Green
 
-    Switch ($Test) {
-        'Host' {
-            $ValidationResults = Invoke-Pester -Tag Host -Script "$here\tests\unit\AzureStackHCILabState.unit.tests.ps1" -PassThru
-            $ValidationResults | Select-Object -Property TagFilter, Time, TotalCount, PassedCount, FailedCount, SkippedCount, PendingCount | Format-Table -AutoSize
+    # Test running elevated
+    $isAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
+    if ($isAdmin) { Write-Host "[$PASS] The window is running elevated" -ForegroundColor DarkCyan }
+    else {
+        Write-Host "[$FAIL] The window is running elevated" -ForegroundColor Red
+        $testsFailed ++
+    }
 
-            If ($ValidationResults.FailedCount -ne 0) {
-                Write-Error 'Prerequisite checks on the host have failed. Please review the output to identify the reason for the failures' -ErrorAction Stop
+    $NodeOS = Get-CimInstance -ClassName 'Win32_OperatingSystem'
+
+    ### Verify the Host is sufficient version
+    if ([Version]$NodeOS.Version -ge 10.0.0) { Write-Host "[$PASS] System is running Windows 10 (Client or Server) or later" -ForegroundColor DarkCyan }
+    else {
+        Write-Host "[$FAIL] System is running Windows 10 (Client or Server) or later" -ForegroundColor Red
+        $testsFailed ++
+    }
+
+    $RequiredMemory = ($LabConfig.VMs.MemoryStartupBytes | Measure-Object -Sum).Sum / 1GB + 2
+    $AvailableMemory = (Get-CimInstance -ClassName Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum / 1GB
+    if ($RequiredMemory -lt $AvailableMemory) {
+        Write-Host "[$PASS] Host system has enough memory to cover what's specified in LabConfig" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "[$FAIL] Host system has enough memory to cover what's specified in LabConfig" -ForegroundColor Red
+        $testsFailed ++
+    }
+
+    $RequiredModules = (Get-Module -Name AzureStackHCIJumpstart -ListAvailable).RequiredModules
+    if ($RequiredModules) {
+        $RequiredModules.GetEnumerator() | ForEach-Object {
+            $thisModule = $_
+
+            Remove-Variable module -ErrorAction SilentlyContinue
+            $module = Get-Module $thisModule.Name -ListAvailable -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
+
+            # Required modules
+            if ($module.Name) { Write-Host "[$PASS] The host system has the module [$($thisModule.Name)]" -ForegroundColor DarkCyan }
+            else {
+                Write-Host "[$FAIL] Host system has enough memory to cover what's specified in LabConfig" -ForegroundColor Red
+                $testsFailed ++
+            }
+
+            # Required version of the modules
+            if ($module.version -ge $_.ModuleVersion) { Write-Host "[$PASS] The host system version of the module [$($thisModule.Name)] is the correct version [$($thisModule.version)]" -ForegroundColor DarkCyan }
+            else {
+                Write-Host "[$FAIL] The host system version of the module [$($thisModule.Name)] is the wrong version." -ForegroundColor Red
+                Write-Host "-- Expected Version: $($_.ModuleVersion)" -ForegroundColor Red
+                Write-Host "-- Actual Version $($thisModule.version)" -ForegroundColor Red
+                $testsFailed ++
+            }
+        }
+    }
+
+    Switch -Wildcard ($NodeOS.Caption) {
+        "*Windows 10*" {
+            $HyperVInstallationState = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V
+
+            if ($HyperVInstallationState.State -eq 'Enabled') {
+                Write-Host "${env:ComputerName} has the feature $($HyperVInstallationState.DisplayName) installed"  -ForegroundColor DarkCyan
+            }
+            else {
+                Write-Host "${env:ComputerName} does not have the feature $($HyperVInstallationState.DisplayName) installed" -ForegroundColor Red
+                $testsFailed ++
             }
         }
 
-        'Lab' {
-            $ValidationResults = Invoke-Pester -Tag Lab -Script "$here\tests\unit\AzureStackHCILabState.unit.tests.ps1" -PassThru
-            $ValidationResults | Select-Object -Property TagFilter, Time, TotalCount, PassedCount, FailedCount, SkippedCount, PendingCount | Format-Table -AutoSize
+        Default {
+            $HyperVInstallationState = (Get-WindowsFeature | Where-Object Name -like *Hyper-V* -ErrorAction SilentlyContinue)
 
-            If ($ValidationResults.FailedCount -ne 0) {
-                Write-Error 'Prerequisite checks for the lab environment have failed. Please review the output or rerun New-AzureStackHCILabEnvironment' -ErrorAction Stop
+            $HyperVInstallationState | ForEach-Object {
+                if ( $_.InstallState -eq 'Installed' ) {
+                    Write-Host "[$PASS] The host system has the feature [$($_.DisplayName)] installed" -ForegroundColor DarkCyan
+                }
+                else {
+                    Write-Host "[$FAIL] The host system has NOT installed the feature [$($_.DisplayName)]" -ForegroundColor Red
+                    $testsFailed ++
+                }
             }
         }
+    }
+
+    Write-Host 'Testing Lab Config (Get-AzureStackHCILabConfig)' -ForegroundColor Green
+
+    # One nodes or more in the lab config
+    'WAC', 'Domain Controller' | Foreach-Object {
+        $thisRole = $_
+        if (($LabConfig.VMs.Where{$_.Role -eq "$thisRole" }).Count -ge 1) {
+            Write-Host "[$PASS] The Get-AzureStackHCILabConfig function specifies at least one machine with the role $_" -ForegroundColor DarkCyan
+        }
+        else {
+            Write-Host "[$FAIL] The Get-AzureStackHCILabConfig function specifies at least one machine with the role $_" -ForegroundColor Red
+            $testsFailed ++
+        }
+    }
+
+    # Two nodes or more in the lab config
+    'AzureStackHCI' | Foreach-Object {
+        $thisRole = $_
+        if (($LabConfig.VMs.Where{$_.Role -eq $thisRole }).Count -ge 2) {
+            Write-Host "[$PASS] The Get-AzureStackHCILabConfig function specifies at least one machine with the role $_" -ForegroundColor DarkCyan
+        }
+        else {
+            Write-Host "[$FAIL] The Get-AzureStackHCILabConfig function specifies at least one machine with the role $_" -ForegroundColor Red
+            $testsFailed ++
+        }
+    }
+
+    # DHCP scope specified in labconfig is not in use on this machine
+    $DHCPScopePrefix = $LabConfig.DHCPScope | foreach-Object { ([ipaddress]$_).GetAddressBytes()[0..2] -join '.' }
+    $ExistingSwitch = "NATGW-$($LabConfig.Prefix)-$($LabConfig.SwitchName)"
+    $InUseAddress = Get-NetIPAddress | Where {$_.IPAddress -like "$DHCPScopePrefix*" -and $_.InterfaceAlias -ne $ExistingSwitch}
+
+    if (-not($InUseAddress)) {
+        Write-Host "[$PASS] The DHCP Scope in the Get-AzureStackHCILabConfig function does not conflict with any already in use on this machine." -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "[$FAIL] The Get-AzureStackHCILabConfig function specifies a DHCP Scope that is in use on this machine." -ForegroundColor Red
+        $testsFailed ++
+    }
+
+    # Ensure WS base disks actually exist
+    if (Test-Path $LabConfig.BaseVHDX_WS) {
+        Write-Host "[$PASS] The Windows Server Base VHDX specified in the lab config file actually exists" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "[$FAIL] The Windows Server Base VHDX specified in the lab config file does not exist" -ForegroundColor Red
+        $testsFailed ++
+    }
+
+    # Ensure HCI base disks actually exist
+    if (Test-Path $LabConfig.BaseVHDX_HCI) {
+        Write-Host "[$PASS] The Azure Stack HCI Base VHDX specified in the lab config file actually exists" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "[$FAIL] The Azure Stack HCI Base VHDX specified in the lab config file does not exist" -ForegroundColor Red
+        $testsFailed ++
+    }
+
+    If ($testsfailed -gt 0) {
+        Write-Error 'Prerequisite checks on the host have failed. Please review the output to identify the reason for the failures' -ErrorAction Stop
     }
 }
 

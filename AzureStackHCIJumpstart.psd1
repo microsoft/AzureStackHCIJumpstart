@@ -51,11 +51,10 @@ Description = 'Helps deploy the Azure Stack HCI Deployment labs'
 # ProcessorArchitecture = ''
 
 # Modules that must be imported into the global environment prior to importing this module
-RequiredModules = @(@{ModuleName = 'NetworkingDSC'; ModuleVersion = '7.4.0.0'; }, 
-               @{ModuleName = 'xDNSServer'; ModuleVersion = '1.15.0.0'; }, 
-               @{ModuleName = 'xActiveDirectory'; ModuleVersion = '3.0.0.0'; }, 
-               @{ModuleName = 'xDHCPServer'; ModuleVersion = '2.0.0.0'; }, 
-               @{ModuleName = 'Pester'; RequiredVersion = '4.9.0'; })
+RequiredModules = @(@{ModuleName = 'NetworkingDSC'; ModuleVersion = '7.4.0.0'; },
+               @{ModuleName = 'xDNSServer'; ModuleVersion = '1.15.0.0'; },
+               @{ModuleName = 'xActiveDirectory'; ModuleVersion = '3.0.0.0'; },
+               @{ModuleName = 'xDHCPServer'; ModuleVersion = '2.0.0.0' })
 
 # Assemblies that must be loaded prior to importing this module
 # RequiredAssemblies = @()
@@ -73,10 +72,10 @@ RequiredModules = @(@{ModuleName = 'NetworkingDSC'; ModuleVersion = '7.4.0.0'; }
 # NestedModules = @()
 
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-FunctionsToExport = 'New-AzureStackHCIStageSnapshot', 
-               'Initialize-AzureStackHCILabOrchestration', 
-               'Remove-AzureStackHCILabEnvironment', 
-               'Restore-AzureStackHCIStageSnapshot', 'Get-AzureStackHCILabConfig', 
+FunctionsToExport = 'New-AzureStackHCIStageSnapshot',
+               'Initialize-AzureStackHCILabOrchestration',
+               'Remove-AzureStackHCILabEnvironment',
+               'Restore-AzureStackHCIStageSnapshot', 'Get-AzureStackHCILabConfig',
                'Remove-AzureStackHCIStageSnapshot'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.

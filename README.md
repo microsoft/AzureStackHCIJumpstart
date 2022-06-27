@@ -240,24 +240,6 @@ It's doing a lot and there are some long-running tasks (measured in minutes rath
 
 - {long} Create the AD Domain; configures DHCP used to program the rest of the VMs; configures DNS to resolve internet-based resources.
 
-# Community or external modules used
-
-Special thanks to the owners/maintainers of these modules:
-
-- [Convert-WindowsImage](https://github.com/MicrosoftDocs/Virtualization-Documentation/tree/master/hyperv-tools/Convert-WindowsImage) - By the Microsoft Hyper-V Team
-
-- [Pester](https://github.com/pester/Pester)
-
-- [PoshRSJob](https://github.com/proxb/PoshRSJob)
-
-- [NetworkingDsc](https://github.com/dsccommunity/NetworkingDsc)
-
-- [xActiveDirectory](https://github.com/dsccommunity/ActiveDirectoryDsc)
-
-- [xDHCPServer](https://github.com/dsccommunity/xDhcpServer)
-
-- [xDNSServer](https://github.com/dsccommunity/xDnsServer)
-
 # Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a

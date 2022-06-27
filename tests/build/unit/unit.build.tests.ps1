@@ -13,7 +13,7 @@ Describe "$($env:repoName)-Manifest" {
     }
 
     Context "Required Modules" {
-        'Pester', 'NetworkingDsc', 'xDNSServer', 'xDHCPServer' | ForEach-Object {
+        'NetworkingDsc', 'xDNSServer', 'xDHCPServer' | ForEach-Object {
             $module = Find-Module -Name $_ -ErrorAction SilentlyContinue
 
             It "Should contain the $_ Module" {
