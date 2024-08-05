@@ -144,6 +144,24 @@ Function Approve-AzureStackHCILabState {
         $testsFailed ++
     }
 
+    # Ensure WS base disks are not read only
+    if (-not ((Get-Item $LabConfig.BaseVHDX_WS).IsReadOnly)) {
+        Write-Host "[$PASS] The Windows Server Base VHDX specified in the lab config is writeable" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "[$FAIL] The Windows Server Base VHDX specified in the lab config file is read-only" -ForegroundColor Red
+        $testsFailed ++
+    }
+
+    # Ensure WS base disks are not read only
+    if (-not ((Get-Item $LabConfig.BaseVHDX_HCI).IsReadOnly)) {
+        Write-Host "[$PASS] The Azure Stack HCI Base VHDX specified in the lab config is writeable" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "[$FAIL] The Azure Stack HCI Base VHDX specified in the lab config file is read-only" -ForegroundColor Red
+        $testsFailed ++
+    }
+
     If ($testsfailed -gt 0) {
         Write-Error 'Prerequisite checks on the host have failed. Please review the output to identify the reason for the failures' -ErrorAction Stop
     }
@@ -347,11 +365,11 @@ Function Initialize-HCIBaseDisk {
     $TimeZone  = (Get-TimeZone).id
     Remove-Item -Path "$VMPath\buildData\Unattend.xml" -Force -ErrorAction SilentlyContinue
     Remove-Item -Path "$VMPath\buildData\HCIBaseDisk_unattend.xml" -Force -ErrorAction SilentlyContinue
-    New-UnattendFileForVHD -TimeZone $TimeZone -AdminPassword $LabConfig.AdminPassword -Path "$VMPath\buildData"
+    $unattendFile = New-UnattendFileForVHD -TimeZone $TimeZone -AdminPassword $LabConfig.AdminPassword -Path "$VMPath\buildData"
 
     #Apply Unattend to VM
     Write-Host "`t Applying Unattend for HCI Base Disk"
-    $unattendfile = "$VMPath\buildData\Unattend.xml"
+    $unattendfile = $unattendFile.FullName
 
     If ($LabConfig.BaseVHDX_HCI) { $global:HCIVHDPath = $LabConfig.BaseVHDX_HCI }
 
