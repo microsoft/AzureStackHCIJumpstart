@@ -378,8 +378,8 @@ Function Initialize-HCIBaseDisk {
         $MountedDisk = Mount-DiskImage -ImagePath $HCIVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
 
         If ( $($MountedDisk.Attached) -eq $true ) {
-            $DriveLetter = $(Get-DiskImage -ImagePath $HCIVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
-            $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter -ErrorAction SilentlyContinue).sizeMax
+            $DriveLetter = ($(Get-DiskImage -ImagePath $HCIVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter)[0]
+            $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter[0] -ErrorAction SilentlyContinue).sizeMax
 
             #TODO: Make sure not the same size as the drives included in LabConfig
             Switch ($MaxSize) {
@@ -388,8 +388,8 @@ Function Initialize-HCIBaseDisk {
                     Resize-VHD -Path $HCIVHDPath -SizeBytes (100GB)
 
                     #Note: Redo all this stuff in case the drive letters changed
-                    $MountedDisk = Mount-DiskImage -ImagePath $HCIVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
-                    $DriveLetter = $(Get-DiskImage -ImagePath $HCIVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
+                    $MountedDisk = Mount-DiskImage  -ImagePath $HCIVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
+                    $DriveLetter = ($(Get-DiskImage -ImagePath $HCIVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter)[0]
 
                     Resize-Partition -DriveLetter $DriveLetter -Size $MaxSize -ErrorAction SilentlyContinue
                 }
@@ -413,6 +413,8 @@ Function Initialize-HCIBaseDisk {
     Else { Write-Error "$HCIVHDPath was not found - Can't hydrate the basedisk" -ErrorAction Stop }
 
     Dismount-DiskImage -ImagePath $HCIVHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
+
+    Write-Host "`t $HCIVHDPath is now being marked ReadOnly"
     Set-ItemProperty -Path $HCIVHDPath -Name IsReadOnly -Value $true
 
     Rename-Item -Path $unattendfile -NewName "$VMPath\buildData\HCIBaseDisk_unattend.xml"
@@ -423,7 +425,11 @@ Function Initialize-WSBaseDisk {
     $TimeZone  = (Get-TimeZone).id
     Remove-Item -Path "$VMPath\buildData\Unattend.xml" -Force -ErrorAction SilentlyContinue
     Remove-Item -Path "$VMPath\buildData\WSBaseDisk_unattend.xml" -Force -ErrorAction SilentlyContinue
-    New-UnattendFileForVHD -TimeZone $TimeZone -AdminPassword $LabConfig.AdminPassword -Path "$VMPath\buildData"
+    $unattendFile = New-UnattendFileForVHD -TimeZone $TimeZone -AdminPassword $LabConfig.AdminPassword -Path "$VMPath\buildData"
+
+    #Apply Unattend to VM
+    Write-Host "`t Applying Unattend for WS Base Disk"
+    $unattendfile = $unattendFile.FullName
 
     #Apply Unattend to VM
     Write-Host "`t Applying Unattend and copying DSC Modules for WS Base Disk"
@@ -437,10 +443,8 @@ Function Initialize-WSBaseDisk {
         $MountedDisk = Mount-DiskImage -ImagePath $WSVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
 
         If ( $($MountedDisk.Attached) -eq $true ) {
-            $DriveLetter = $(Get-DiskImage -ImagePath $WSVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
-
-            if ($DriveLetter.Count -gt 1) { $DriveLetter = $DriveLetter[0] }
-            $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter -ErrorAction SilentlyContinue).sizeMax
+            $DriveLetter = ($(Get-DiskImage -ImagePath $WSVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter)[0]
+            $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter[0] -ErrorAction SilentlyContinue).sizeMax
 
             #TODO: Make sure not the same size as the drives included in LabConfig
             Switch ($MaxSize) {
@@ -449,8 +453,8 @@ Function Initialize-WSBaseDisk {
                     Resize-VHD -Path $WSVHDPath -SizeBytes (100GB)
 
                     #Note: Redo all this stuff in case the drive letters changed
-                    $MountedDisk = Mount-DiskImage -ImagePath $WSVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
-                    $DriveLetter = $(Get-DiskImage -ImagePath $WSVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
+                    $MountedDisk = Mount-DiskImage  -ImagePath $WSVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
+                    $DriveLetter = ($(Get-DiskImage -ImagePath $WSVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter)[0]
 
                     Resize-Partition -DriveLetter $DriveLetter -Size $MaxSize -ErrorAction SilentlyContinue
                 }
@@ -460,9 +464,7 @@ Function Initialize-WSBaseDisk {
             $MountPath = "$($DriveLetter):" -replace ' '
 
 
-            If ( Test-Path "$MountPath\Windows\Panther\unattend.xml" ) {
-                Write-Host "`t Unattend file exists..."
-            }
+            If ( Test-Path "$MountPath\Windows\Panther\unattend.xml" ) { Write-Host "`t Unattend file exists..." }
             Else {
                 Write-Host "`t Unattend file does not exist...Updating..."
 
@@ -472,13 +474,8 @@ Function Initialize-WSBaseDisk {
                 'xActiveDirectory', 'xDNSServer', 'NetworkingDSC', 'xDHCPServer' | foreach-Object {
                     $thisModule = $_
 
-                    Start-RSJob -Name "$thisModule-Modules" -ScriptBlock {
-                        Copy-Item -Path "C:\Program Files\WindowsPowerShell\Modules\$($using:thisModule)" -Destination "$($using:MountPath)\Program Files\WindowsPowerShell\Modules\" -Recurse -Force
-                    } -OutVariable +RSJob | Out-Null
+                    Copy-Item -Path "C:\Program Files\WindowsPowerShell\Modules\$($thisModule)" -Destination "$($MountPath)\Program Files\WindowsPowerShell\Modules\" -Recurse -Force
                 }
-
-                Wait-RSJob   $RSJob | Out-Null
-                Remove-RSJob $RSJob | Out-Null
 
                 Copy-Item -Path $unattendfile -Destination "$MountPath\Windows\Panther\unattend.xml" -Force
             }

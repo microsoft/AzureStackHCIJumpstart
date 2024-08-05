@@ -23,14 +23,14 @@ Function Get-AzureStackHCILabConfig {
         #ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
         # This is the filepath to the BaseDisk that will be used to deploy the lab VMs
-        BaseVHDX_HCI = 'E:\datastore\base\26096.1.amd64fre.ge_release.240329-1154_server_serverdatacenter_en-us_vl.vhdx'
-        BaseVHDX_WS  = 'E:\datastore\base\26096.1.amd64fre.ge_release.240329-1154_server_serverdatacenter_en-us_vl.vhdx'
+        BaseVHDX_HCI = 'E:\datastore\base\BaseHCI_26096.1.amd64fre.ge_release.240329-1154_server_serverdatacenter_en-us_vl.vhdx'
+        BaseVHDX_WS  = 'E:\datastore\base\BaseWS_26096.1.amd64fre.ge_release.240329-1154_server_serverdatacenter_en-us_vl.vhdx'
 
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
         #Note: Only /24 is supported right now.
-        DHCPscope     = '10.0.0.0'
+        DHCPscope     = '192.168.11.0'
 
         SwitchName = 'ASZHCI'
         VMs = @()
@@ -59,12 +59,12 @@ Function Get-AzureStackHCILabConfig {
         }
     }
 
-    <# Specify WAC System; does not install WAC, just creates server. You will need to ManageAs in WAC due to known CredSSP Bug
+    #Specify WAC System; does not install WAC, just creates server. You will need to ManageAs in WAC due to known CredSSP Bug
     $LABConfig.VMs += @{
         VMName = 'WAC01'
         MemoryStartupBytes = 16GB
         Role = 'WAC'
-    }#>
+    }
 
     $LABConfig.VMs += @{
         VMName        = 'DC01'
