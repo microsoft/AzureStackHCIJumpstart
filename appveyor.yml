@@ -38,7 +38,7 @@ image:
 
 environment:
   NuGetApiKey:
-    secure: N4Mt/R/8j1Lk6GPkWqpkBl7ktciiBQfb3s4wzT0rghDQDeGJErjQshcdgazxzE/X
+    secure: xjMNTyuFLZXaS4dq9RlzmUmUI0v2g2S86xpiippFyRcAKBL9/KfPIXXsklBhxmFb
   GitHubKey:
     secure: 4VTkUGIAUqMtDSbrIrbn856kPmOLVYNSSy/NwsnQajL+7o+xpoqWZcTpYfEXco2/
   #  APPVEYOR_RDP_PASSWORD:
