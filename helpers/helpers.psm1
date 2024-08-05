@@ -292,7 +292,7 @@ Function New-UnattendFileForVHD {
 
     $unattendFile = New-Item "$Path\Unattend.xml" -ItemType File -Force
     $fileContent =  @"
-    <?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
     <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
         <settings pass="offlineServicing">
             <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -300,18 +300,28 @@ Function New-UnattendFileForVHD {
         </settings>
         <settings pass="oobeSystem">
             <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-                <UserAccounts>
-                    <AdministratorPassword>
-                        <Value>$($LabConfig.AdminPassword)</Value>
-                        <PlainText>true</PlainText>
-                    </AdministratorPassword>
-                </UserAccounts>
-                <OOBE>
-                    <HideEULAPage>true</HideEULAPage>
-                    <SkipMachineOOBE>true</SkipMachineOOBE>
-                    <SkipUserOOBE>true</SkipUserOOBE>
-                </OOBE>
-                <TimeZone>$TimeZone</TimeZone>
+            <AutoLogon>
+                <Password>
+                    <Value>$($LabConfig.AdminPassword)</Value>
+                </Password>
+                <Enabled>true</Enabled>
+                <LogonCount>2</LogonCount>
+                <Username>Administrator</Username>
+            </AutoLogon>
+            <UserAccounts>
+                <AdministratorPassword>
+                    <Value>$($LabConfig.AdminPassword)</Value>
+                    <PlainText>true</PlainText>
+                    <Enabled>true</Enabled>
+                </AdministratorPassword>
+            </UserAccounts>
+            <OOBE>
+                <HideEULAPage>true</HideEULAPage>
+                <SkipMachineOOBE>true</SkipMachineOOBE>
+                <SkipUserOOBE>true</SkipUserOOBE>
+                <ProtectYourPC>3</ProtectYourPC>
+            </OOBE>
+            <TimeZone>$TimeZone</TimeZone>
             </component>
         </settings>
         <settings pass="specialize">
@@ -349,7 +359,7 @@ Function Initialize-HCIBaseDisk {
         Dismount-DiskImage -ImagePath $HCIVHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
         $MountedDisk = Mount-DiskImage -ImagePath $HCIVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
 
-        If ( $MountedDisk ) {
+        If ( $($MountedDisk.Attached) -eq $true ) {
             $DriveLetter = $(Get-DiskImage -ImagePath $HCIVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
             $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter -ErrorAction SilentlyContinue).sizeMax
 
@@ -408,8 +418,10 @@ Function Initialize-WSBaseDisk {
         Dismount-DiskImage -ImagePath $WSVHDPath -ErrorAction SilentlyContinue -InformationAction SilentlyContinue
         $MountedDisk = Mount-DiskImage -ImagePath $WSVHDPath -StorageType VHDX -ErrorAction SilentlyContinue
 
-        If ( $MountedDisk ) {
+        If ( $($MountedDisk.Attached) -eq $true ) {
             $DriveLetter = $(Get-DiskImage -ImagePath $WSVHDPath | Get-Disk | Get-Partition | Get-Volume).DriveLetter
+
+            if ($DriveLetter.Count -gt 1) { $DriveLetter = $DriveLetter[0] }
             $MaxSize = (Get-PartitionSupportedSize -DriveLetter $DriveLetter -ErrorAction SilentlyContinue).sizeMax
 
             #TODO: Make sure not the same size as the drives included in LabConfig
@@ -681,7 +693,7 @@ Function Add-LabVirtualMachines {
         If ($VM) { Write-Host "`t VM named $($LabConfig.Prefix)$($_.VMName) already exists" }
         else {
             Write-Host "`t Creating VM: $($LabConfig.Prefix)$($_.VMName)"
-            $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes $_.MemoryStartupBytes -Path $vmpath -SwitchName "$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -Generation 2
+            $VM = New-VM -Name "$($LabConfig.Prefix)$($_.VMName)" -MemoryStartupBytes $_.MemoryStartupBytes -Path $VMPath -SwitchName "$($LabConfig.Prefix)-$($LabConfig.Switchname)*" -Generation 2
 
             if ( $thisVM.Role -eq 'AzureStackHCI' ) {
                 New-VHD -Path "$($VM.Path)\Virtual Hard Disks\OSD.VHDX" -ParentPath $HCIVHDPath -Differencing | Out-Null
@@ -732,8 +744,8 @@ Function Assert-LabDomain {
 
     # Use local cred
     Invoke-Command -VMName $DCName -Credential $localCred -ScriptBlock {
-        Set-DscLocalConfigurationManager -Path "$($using:VMPath)\buildData\config" -Force | Out-Null
-        Start-DscConfiguration           -Path "$($using:VMPath)\buildData\config" -Force | Out-Null
+        Set-DscLocalConfigurationManager -Path "$($using:GuestPath)\buildData\config" -Force | Out-Null
+        Start-DscConfiguration           -Path "$($using:GuestPath)\buildData\config" -Force | Out-Null
     }
 }
 
@@ -1103,7 +1115,17 @@ Function Register-AzureStackHCIStartupTasks {
             Add-Content -Path $startupScript -value $diskContent
         }
 
-        Copy-VMFile -Name $thisVM.Name -SourcePath $startupScript.FullName -DestinationPath $startupScript.FullName -CreateFullPath -FileSource Host -Force
+            $PathCheck = $startupScript.FullName -split ':'
+
+            if (($PathCheck)[0] -ne 'C')
+            {
+                $DestinationPath = -join ('C:', $PathCheck[1])
+            }
+            else { $DestinationPath = $startupScript.FullName }
+
+            Remove-Variable PathCheck -ErrorAction SilentlyContinue
+
+        Copy-VMFile -Name $thisVM.Name -SourcePath $startupScript.FullName -DestinationPath $DestinationPath -CreateFullPath -FileSource Host -Force
         Invoke-Command -VMName $thisVM.Name -Credential $localCred -ScriptBlock {
             $thisJobVM = $($using:thisVM.Name)
 

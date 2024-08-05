@@ -1,11 +1,15 @@
 Function Get-AzureStackHCILabConfig {
     # This is the path where VMs will be created for the lab e.g. c:\DataStore\VMs (then \VM01 folder will be added below it)
-    $global:VMPath = 'C:\ClusterStorage\Volume01'
+    $global:VMPath = 'E:\datastore\VMs'
+
+    # This is the path where data will be stored inside the VMs for configuration
+    $global:GuestPath = 'C:\datastore\VMs'
+
     New-Item -Path $VMPath -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
 
     $LabConfig = @{
         # Will be appended to every VM
-        Prefix     = 'AS'
+        Prefix     = 'WS25'
 
         # Username will not be generated due to an issue with xActiveDirectory
         DomainAdminName   = 'Bruce'
@@ -19,8 +23,8 @@ Function Get-AzureStackHCILabConfig {
         #ServerISO   = 'C:\Datastore\19507.1000.191028-1403.rs_prerelease_SERVER_VOL_x64FRE_en-us.iso'
 
         # This is the filepath to the BaseDisk that will be used to deploy the lab VMs
-        BaseVHDX_HCI = 'C:\DataStore\base\20348.30163.amd64fre.fe_release_svc_staging.220618-1750_server_serverAzureStackHCICor_en-us.vhdx'
-        BaseVHDX_WS  = 'C:\DataStore\base\20348.30163.amd64fre.fe_release_svc_staging.220618-1750_server_serverdatacenter_en-us_vl.vhdx'
+        BaseVHDX_HCI = 'E:\datastore\base\26096.1.amd64fre.ge_release.240329-1154_server_serverdatacenter_en-us_vl.vhdx'
+        BaseVHDX_WS  = 'E:\datastore\base\26096.1.amd64fre.ge_release.240329-1154_server_serverdatacenter_en-us_vl.vhdx'
 
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
@@ -37,7 +41,7 @@ Function Get-AzureStackHCILabConfig {
 
             # 'Role' should always be AzureStackHCI
             Role = 'AzureStackHCI'
-            MemoryStartupBytes = 8GB
+            MemoryStartupBytes = 16GB
 
             SCMDrives = @{ Count = 2 ; Size  = 32GB  }
             SSDDrives = @{ Count = 4 ; Size  = 256GB }
@@ -48,44 +52,22 @@ Function Get-AzureStackHCILabConfig {
                 #Note: Where/when needed, these will include a unique number to distinguish
                 @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
                 @{ InterfaceDescription = 'Intel(R) Gigabit I350-t rNDC'}
-                @{ InterfaceDescription = 'Mellanox Connect-X CX6'}
-                @{ InterfaceDescription = 'Mellanox Connect-X CX6'}
+                @{ InterfaceDescription = 'Mellanox Connect-X CX7'}
+                @{ InterfaceDescription = 'Mellanox Connect-X CX7'}
             )
         }
     }
 
-    # Specify WAC System; does not install WAC, just creates server. You will need to ManageAs in WAC due to known CredSSP Bug
+    <# Specify WAC System; does not install WAC, just creates server. You will need to ManageAs in WAC due to known CredSSP Bug
     $LABConfig.VMs += @{
         VMName = 'WAC01'
-        MemoryStartupBytes = 4GB
-
-        # Accept folders of MSI's or a specific MSI
-<#
-        MSIInstaller = @(
-            @{ Path = 'c:\datastore\folderA' } ,
-            @{ Path = 'c:\datastore\MSIFile1.msi' }
-            # @{ Path = 'c:\datastore\MSIFile1.msi'; CustomCommands = '' }
-        )
-
-        FileCopy = @(
-            @{
-                local  = 'c:\datastore\folderA'
-                remote = 'c:\PathOnVM\folderA'
-            }
-            @{
-                local  = 'c:\datastore\abc.txt'
-                remote = 'c:\xyz\abc.txt'
-            }
-        )
-#>
-        #TODO: Add flag to specify the path to the W10 media if not to use Server
-        # This should always be WAC
+        MemoryStartupBytes = 16GB
         Role = 'WAC'
-    }
+    }#>
 
     $LABConfig.VMs += @{
         VMName        = 'DC01'
-        MemoryStartupBytes = 4GB
+        MemoryStartupBytes = 16GB
 
         # This should always be Domain Controller - Do not change
         Role          = 'Domain Controller'
@@ -196,8 +178,8 @@ Function Remove-AzureStackHCILabEnvironment {
         Remove-VMSwitch "$($LabConfig.Prefix)-$($LabConfig.SwitchName)*" -Force -ErrorAction SilentlyContinue
         Get-NetNat -Name "NAT-$($LabConfig.Prefix)-$($LabConfig.SwitchName)" -ErrorAction SilentlyContinue | Remove-NetNat -Confirm:$false -ErrorAction SilentlyContinue
 
-        Write-Host " - Destroying BaseDisk at $VMPath "
-        Remove-Item -Path "$VMPath\BaseDisk_*.vhdx" -Force -ErrorAction SilentlyContinue
+        Write-Host " - Destroying disks labelled 'BaseDisk_*' at $VMPath"
+        Remove-Item -Path "$VMPath\BaseDisk_*.vhdx" -Force
     }
 
     Get-RSJob | Stop-RSJob   | Out-Null
@@ -857,7 +839,16 @@ Function Initialize-AzureStackHCILabOrchestration {
 
     do {
         Get-ChildItem "$VMPath\buildData\config" -Recurse -File | ForEach-Object {
-            Copy-VMFile -Name $DC.Name -SourcePath $_.FullName -DestinationPath $_.FullName -CreateFullPath -FileSource Host -Force
+            $PathCheck = $($_.FullName) -split ':'
+
+                if (($PathCheck)[0] -ne 'C')
+                {
+                    $DestinationPath = -join ('C:', $PathCheck[1])
+                }
+                else { $DestinationPath = $_.FullName }
+
+                Remove-Variable PathCheck -ErrorAction SilentlyContinue
+                Copy-VMFile -Name ASDC01 -SourcePath $_.FullName -DestinationPath $DestinationPath -CreateFullPath -FileSource Host -Force
         }
 
         [Console]::WriteLine("`t Checking if reboot is needed due to hostname change prior to DC Promotion")
@@ -866,8 +857,8 @@ Function Initialize-AzureStackHCILabOrchestration {
         $BuildDataExists, $RebootIsNeeded = Invoke-Command -VMName $DC.Name -Credential $localCred -ScriptBlock {
             $thisDC = $using:DC
 
-            $metaConfig = Test-Path "$using:VMPath\buildData\config\localhost.meta.mof" -ErrorAction SilentlyContinue
-            $DCConfig   = Test-Path "$using:VMPath\buildData\config\localhost.mof" -ErrorAction SilentlyContinue
+            $metaConfig = Test-Path "$using:GuestPath\buildData\config\localhost.meta.mof" -ErrorAction SilentlyContinue
+            $DCConfig   = Test-Path "$using:GuestPath\buildData\config\localhost.mof" -ErrorAction SilentlyContinue
             $BuildDataExists = $metaConfig -and $DCConfig
 
             do {
@@ -888,7 +879,7 @@ Function Initialize-AzureStackHCILabOrchestration {
         }
 
         [Console]::WriteLine("`t Reboot is needed: $RebootIsNeeded")
-        [Console]::WriteLine("`t BuildDataExists: $BuildDataExists")
+        [Console]::WriteLine("`t Build Data Exists at $($GuestPath): $BuildDataExists")
         if ($RebootIsNeeded) { Reset-AzStackVMs -VMs $DC -Restart -Wait }
 
         if ($BuildDataExists -eq $false -or $RebootIsNeeded -eq $true) { Start-Sleep -Seconds 10 }
@@ -943,10 +934,10 @@ Function Initialize-AzureStackHCILabOrchestration {
     $timer = Get-Date
     "Completed non-domain controller VMs initialization: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
 
-    # Begin long-running reparent task - runs async
+    # Begin copy and reparent task
+    # TODO: Set a breakpoint here during a task to see if it's actually done. You might need to wait-rsjob and remove-rsjob before writing the timer
     $AllVMs | ForEach-Object {
-        $thisVM = $_
-
+        "Beginning $($thisVM.Name) Base disk copy and reparenting: $($timer.ToString("hh:mm:ss.fff"))" | Out-File $logfile.fullname -Append
         Start-RSJob -Name "$($thisVM.Name)-Reparent" -ScriptBlock {
             $thisJobVM = $using:thisVM
 
