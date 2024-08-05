@@ -26,6 +26,7 @@ Function Get-AzureStackHCILabConfig {
         BaseVHDX_HCI = 'E:\datastore\base\26096.1.amd64fre.ge_release.240329-1154_server_serverdatacenter_en-us_vl.vhdx'
         BaseVHDX_WS  = 'E:\datastore\base\26096.1.amd64fre.ge_release.240329-1154_server_serverdatacenter_en-us_vl.vhdx'
 
+
         # This is the name of the internal switch to attach VMs to. This uses DHCP to assign VMs IPs and uses NAT to avoid taking over your network...
         # If the specified switch doesn't exist an Internal switch will be created AzureStackHCILab-Guid.
         #Note: Only /24 is supported right now.
